@@ -38,6 +38,8 @@ def run(
     z_score_x: str = "independent",
     z_score_theta: str = "independent",
     max_num_epochs: int = 2**31 - 1,
+    alpha_start: float = 1.,
+    alpha_decay: float = 0.,
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
     """Runs (S)NVI from `sbi`
 
@@ -65,6 +67,12 @@ def run(
     """
     assert not (num_observation is None and observation is None)
     assert not (num_observation is not None and observation is not None)
+
+    assert (
+        alpha_start >= 0. and
+        alpha_start <= 1. and
+        alpha_decay >= 0.
+    )
 
     log = logging.getLogger(__name__)
 
@@ -131,12 +139,13 @@ def run(
         (
             potential_fn,
             theta_transform,
-        ) = inference.likelihood_estimator_based_potential(
+        ) = inference.annealed_likelihood_estimator_based_potential(
             density_estimator,
             prior,
             observation,
             # NOTE: disable transform if sbibm does it. will return IdentityTransform.
             enable_transform=not automatic_transforms_enabled,
+            alpha=min(alpha_start + alpha_decay * r, 1.)
         )
         posterior = inference.VIPosterior(
             potential_fn=potential_fn,
