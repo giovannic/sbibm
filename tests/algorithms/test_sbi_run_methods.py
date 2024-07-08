@@ -1,13 +1,23 @@
 import pytest
 
 import sbibm
-from sbibm.algorithms.sbi import mcabc, smcabc, snle, snpe, snre, sl
+from sbibm.algorithms.sbi import (
+    mcabc,
+    smcabc,
+    snle,
+    snvi,
+    snpe,
+    snre,
+    sl
+)
+
+from typing import Dict, Any
 
 
 # a fast test
 @pytest.mark.parametrize(
     "run_method",
-    (mcabc, smcabc, snle, snpe, snre, sl),
+    (mcabc, smcabc, snle, snvi, snpe, snre, sl),
 )
 @pytest.mark.parametrize("task_name", ("gaussian_mixture",))
 @pytest.mark.parametrize("num_observation", (1,))
@@ -21,9 +31,9 @@ def test_sbi_api(
     task = sbibm.get_task(task_name)
     num_rounds = 2
 
-    if run_method in (mcabc, smcabc, sl):  # abc algorithms
-        kwargs = dict()
-    else:  # neural algorithms
+    kwargs: Dict[str, Any] = dict()
+
+    if run_method not in (mcabc, smcabc, sl):  # neural algorithms
         kwargs = dict(
             num_rounds=num_rounds,
             training_batch_size=100,
@@ -31,7 +41,15 @@ def test_sbi_api(
         )
     if run_method in (snle, snre):
         kwargs["mcmc_parameters"] = dict(
-            num_chains=100, warmup_steps=100, thin=10, init_strategy="resample"
+            num_chains=4,
+            warmup_steps=100,
+            thin=10,
+            init_strategy="resample"
+        )
+    if run_method == snvi:
+        kwargs["vi_parameters"] = dict(
+            n_particles=8,
+            max_num_iters=10
         )
 
     predicted, _, _ = run_method(
