@@ -147,7 +147,7 @@ def run(
         ).train(**vi_parameters)
         # Change init_strategy to latest_sample after second round.
 
-        q = posterior
+        q = posterior.set_default_x(observation)
         posteriors.append(posterior)
 
     posterior = wrap_posterior(posteriors[-1], transforms)
