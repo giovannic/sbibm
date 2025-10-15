@@ -116,14 +116,14 @@ context switching and enable incremental testing.
   - _Requirements: 1.1_
   - _Leverage: CLAUDE.md existing task documentation_
 
-- [ ] 9. Run tests to validate SIR task
+- [x] 9. Run tests to validate SIR task
   - Command: `pytest tests/tasks/two_moons/test_task.py -v` (sanity check)
   - Command: `pytest tests/tasks/test_task_interface.py::test_task_can_be_obtained[sir] -v`
   - Command: `pytest tests/tasks/test_task_interface.py::test_simulate_from_thetas[sir] -v`
   - Verify no import errors and basic simulation works
   - _Requirements: 2.2, 2.3_
 
-- [ ] 10. Run tests to validate Lotka-Volterra task
+- [x] 10. Run tests to validate Lotka-Volterra task
   - Command: `pytest
     tests/tasks/test_task_interface.py::test_task_can_be_obtained[lotka_volterra]
     -v`
@@ -133,7 +133,7 @@ context switching and enable incremental testing.
   - Verify no import errors and basic simulation works
   - _Requirements: 2.2, 2.3_
 
-- [ ] 11. Run full test suite for ODE tasks
+- [x] 11. Run full test suite for ODE tasks
   - Command: `pytest tests/tasks/test_task_interface.py -k "sir or
     lotka_volterra" -v`
   - All parametrized tests should pass for both tasks
