@@ -63,6 +63,13 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return TwoMoons(*args, **kwargs)
 
+    elif task_name == "hierarchical_two_moons":
+        from sbibm.tasks.hierarchical_two_moons.task import (
+            HierarchicalTwoMoons,
+        )
+
+        return HierarchicalTwoMoons(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
