@@ -1,0 +1,4 @@
+
+name: hierarchical_slcp
+bottom_up_sample_batch_size: 100
+bottom_up_posterior_sample_batch_size: 100

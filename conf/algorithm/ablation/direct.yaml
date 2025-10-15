@@ -1,0 +1,7 @@
+
+variant: direct
+attention: default
+group_dim: 8
+architecture: single
+training: direct
+n_rounds: 1

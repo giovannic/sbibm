@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 from sbi import inference as inference
-from sbi.utils.get_nn_models import classifier_nn
+from sbi.neural_nets import classifier_nn
 
 from sbibm.algorithms.sbi.utils import (
     wrap_posterior,
@@ -42,6 +42,7 @@ def run(
     z_score_theta: str = "independent",
     variant: str = "B",
     max_num_epochs: int = 2**31 - 1,
+    device: str = "cpu",
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
     """Runs (S)NRE from `sbi`
 
@@ -64,6 +65,7 @@ def run(
         z_score_theta: Whether to z-score theta
         variant: Can be used to switch between SNRE-A (AALR) and -B (SRE)
         max_num_epochs: Maximum number of epochs
+        device: Device to use (cpu, cuda, cuda:0, etc.)
 
     Returns:
         Samples from posterior, number of simulator calls, log probability of true params if computable
@@ -94,9 +96,7 @@ def run(
 
     simulator = task.get_simulator(max_calls=num_simulations)
 
-    transforms = task._get_transforms(automatic_transforms_enabled)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled)["parameters"]
     if automatic_transforms_enabled:
         prior = wrap_prior_dist(prior, transforms)
         simulator = wrap_simulator_fn(simulator, transforms)
@@ -116,7 +116,9 @@ def run(
     else:
         raise NotImplementedError
 
-    inference_method = inference_class(classifier=classifier, prior=prior)
+    inference_method = inference_class(
+        classifier=classifier, prior=prior, device=device
+    )
 
     posteriors = []
     proposal = prior
@@ -140,22 +142,11 @@ def run(
             **training_kwargs,
         )
 
-        (
-            potential_fn,
-            theta_transform,
-        ) = inference.ratio_estimator_based_potential(
+        posterior = inference_method.build_posterior(
             ratio_estimator,
-            prior,
-            observation,
-            # NOTE: disable transform if sbibm does it. will return IdentityTransform.
-            enable_transform=not automatic_transforms_enabled,
-        )
-        posterior = inference.MCMCPosterior(
-            potential_fn=potential_fn,
-            proposal=prior,  # proposal for init_strategy
-            theta_transform=theta_transform,
-            method=mcmc_method,
-            **mcmc_parameters,
+            sample_with="mcmc",
+            mcmc_method=mcmc_method,
+            mcmc_parameters=mcmc_parameters,
         )
         # Change init_strategy to latest_sample after second round.
         if r > 1:

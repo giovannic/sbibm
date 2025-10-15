@@ -1,0 +1,20 @@
+# @package _global_
+#
+# Ablation study sweep (bottom_up only, n_l=50).
+# Usage: python scripts/run_benchmark.py +experiment=ablation -m
+
+defaults:
+  - override /algorithm: bottom_up
+  - override /task: hierarchical_two_moons
+
+n_l: 50
+seed: 42
+num_samples: 1000
+
+hydra:
+  sweeper:
+    params:
+      num_observation: range(1,11)
+      task: hierarchical_gaussian_linear,hierarchical_gaussian_linear_uniform,hierarchical_gaussian_mixture,hierarchical_sir,hierarchical_slcp,hierarchical_two_moons
+      algorithm/ablation: none,mlp,joint,direct,linear,sequential,pf,no_grouping
+      num_simulations: 1000,5000,10000

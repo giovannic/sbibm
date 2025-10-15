@@ -1,0 +1,7 @@
+
+variant: sequential
+attention: default
+group_dim: 8
+architecture: two_stage
+training: bottom_up
+n_rounds: 5

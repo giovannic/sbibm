@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 from sbi import inference as inference
-from sbi.utils.get_nn_models import likelihood_nn
+from sbi.neural_nets import likelihood_nn
 
 from sbibm.algorithms.sbi.utils import (
     wrap_posterior,
@@ -41,6 +41,7 @@ def run(
     z_score_x: str = "independent",
     z_score_theta: str = "independent",
     max_num_epochs: int = 2**31 - 1,
+    device: str = "cpu",
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
     """Runs (S)NLE from `sbi`
 
@@ -61,6 +62,7 @@ def run(
         z_score_x: Whether to z-score x
         z_score_theta: Whether to z-score theta
         max_num_epochs: Maximum number of epochs
+        device: Device to use (cpu, cuda, cuda:0, etc.)
 
     Returns:
         Samples from posterior, number of simulator calls, log probability of true params if computable
@@ -91,9 +93,7 @@ def run(
 
     simulator = task.get_simulator(max_calls=num_simulations)
 
-    transforms = task._get_transforms(automatic_transforms_enabled)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled)["parameters"]
     if automatic_transforms_enabled:
         prior = wrap_prior_dist(prior, transforms)
         simulator = wrap_simulator_fn(simulator, transforms)
@@ -107,6 +107,7 @@ def run(
     inference_method = inference.SNLE_A(
         density_estimator=density_estimator_fun,
         prior=prior,
+        device=device,
     )
 
     posteriors = []
@@ -130,22 +131,11 @@ def run(
             max_num_epochs=max_num_epochs,
         )
 
-        (
-            potential_fn,
-            theta_transform,
-        ) = inference.likelihood_estimator_based_potential(
+        posterior = inference_method.build_posterior(
             density_estimator,
-            prior,
-            observation,
-            # NOTE: disable transform if sbibm does it. will return IdentityTransform.
-            enable_transform=not automatic_transforms_enabled,
-        )
-        posterior = inference.MCMCPosterior(
-            potential_fn=potential_fn,
-            proposal=prior,  # proposal for init_strategy
-            theta_transform=theta_transform,
-            method=mcmc_method,
-            **mcmc_parameters,
+            sample_with="mcmc",
+            mcmc_method=mcmc_method,
+            mcmc_parameters=mcmc_parameters,
         )
         # Change init_strategy to latest_sample after second round.
         if r > 1:

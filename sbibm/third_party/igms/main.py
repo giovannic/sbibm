@@ -207,6 +207,7 @@ Code by Dougal J. Sutherland:
    See the License for the specific language governing permissions and
    limitations under the License.
 """
+
 from functools import wraps
 
 import numpy as np
@@ -643,7 +644,7 @@ class ConstDiagMatrix(SquareMatrix):
         return self.n * self.diag_value
 
     def sq_trace(self):
-        return self.n * (self.diag_value ** 2)
+        return self.n * (self.diag_value**2)
 
 
 class SymmetricConstDiagMatrix(ConstDiagMatrix, SymmetricMatrix):
@@ -726,7 +727,7 @@ class ExpQuadKernel(LazyKernel):
 
     def _compute(self, A, A_sqnorms, B, B_sqnorms):
         D2 = A_sqnorms[:, None] + B_sqnorms[None, :] - 2 * (A @ B.t())
-        return torch.exp(D2 / (-2 * self.sigma ** 2))
+        return torch.exp(D2 / (-2 * self.sigma**2))
 
 
 def mean_difference(X, Y, squared=False):

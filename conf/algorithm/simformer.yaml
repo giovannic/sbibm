@@ -1,0 +1,8 @@
+
+name: simformer
+_target_: sbibm.algorithms.simformer.run
+sampling_steps: 500
+train_step_floor: 5000
+train_step_cap: 100000
+npe_scaled: true
+deepset_scaled: false

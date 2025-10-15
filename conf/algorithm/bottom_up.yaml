@@ -1,0 +1,22 @@
+
+defaults:
+  - ablation: none
+
+name: bottom_up
+_target_: sbibm.algorithms.tfmpe.bottom_up.run
+npe_scaled: false
+deepset_scaled: false
+
+# Transformer architecture
+latent_dim: 256
+n_encoder: 2
+n_heads: 4
+n_ff: 2
+
+# Training batch size
+batch_size: 100
+
+# Tokenisation strategy: "scalar" (one token per value) or
+# "grouped" (pack all observations per local group into one token)
+tokenisation: scalar
+grouped_sample_batch_size: 1000

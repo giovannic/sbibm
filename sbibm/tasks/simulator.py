@@ -45,7 +45,10 @@ class Simulator:
             parameters = parameters.reshape(1, -1)
 
         assert parameters.ndim == 2
-        assert parameters.shape[1] == self.dim_parameters
+        # Note: for hierarchical tasks, parameters.shape[1]
+        # may be less than dim_parameters when training with
+        # fewer local groups. The simulator will infer the
+        # number of local groups from the shape.
 
         requested_simulations = parameters.shape[0]
 
@@ -59,4 +62,4 @@ class Simulator:
 
         self.num_simulations += requested_simulations
 
-        return self.flatten_data(data)
+        return data

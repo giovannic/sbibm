@@ -4,12 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sbibm"
-description = "Simulation-based inference benchmark"
+description = "Hierarchical Simulation-based inference benchmark"
 readme = "README.md"
 dynamic = ["version"]
 authors = [
-    { name = "Jan-Matthis Lueckmann", email = "mail@jan-matthis.de" },
-    { name = "Jan Boelts", email = "jan.boelts@mailbox.org" }
+    { name = "Giovanni Charles", email = "gc1610@ic.ac.uk" },
 ]
 requires-python = ">=3.7"
 license = { text = "MIT" }
@@ -30,22 +29,21 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "autograd",
-    "elfi>=0.7.6",
-    "deneb",
-    "diffeqtorch",
-    "future",
-    "joblib",
+    "diffrax>=0.7.0",
     "numpy>=1.26.4",
     "matplotlib",
     "pandas>=1.0.0",
-    "pyabc>=0.10.8",
-    "pyabcranger>=0.0.48",
-    "sbi>=0.20.0,<0.22.0",
+    "sbi>=0.25.0",
     "pyro-ppl",
     "scikit-learn",
     "torch>=1.8.0",
     "tqdm",
+    "pytorch-lightning>=2.6.0",
+    "einops>=0.8.1",
+    "hydra-core",
+    "tfmpe @ git+https://github.com/mrc-ide/tfmpe.git@0.0.1",
+    "probjax @ git+https://github.com/giovannic/simformer/#subdirectory=src/probjax",
+    "scoresbibm @ git+https://github.com/giovannic/simformer/#subdirectory=src/scoresbibm",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +54,7 @@ dev = [
     "isort>5.0.0",
     "ipdb",
     "pytest",
+    "pytest-benchmark",
     "pytest-plt",
     "typeguard",
 ]
@@ -81,5 +80,10 @@ extend-ignore = ["W503", "E203"]
 profile = "black"
 
 [tool.pytest.ini_options]
-addopts = "--ignore=src/"
+addopts = "--ignore=src/ --import-mode=importlib -m 'not skip_by_default and not slow'"
+testpaths = ["tests"]
 plt_filename_drop = ["^--"]
+markers = [
+    "skip_by_default: skip benchmark tests by default (use -m benchmark to run)",
+    "slow: mark test as slow (skipped by default; use -m slow to run)",
+]

@@ -1,0 +1,8 @@
+
+name: deepset
+_target_: sbibm.algorithms.deepset.run
+dim_hidden: 128
+num_transforms: 6
+learning_rate: 0.001
+npe_scaled: false
+deepset_scaled: true

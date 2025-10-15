@@ -1,0 +1,8 @@
+
+name: snle
+_target_: sbibm.algorithms.sbi.snle.run
+num_rounds: 10
+neural_net: maf
+hidden_features: 50
+npe_scaled: false
+deepset_scaled: false

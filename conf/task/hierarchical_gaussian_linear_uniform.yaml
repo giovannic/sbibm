@@ -1,0 +1,3 @@
+
+name: hierarchical_gaussian_linear_uniform
+bottom_up_sample_batch_size: 1000

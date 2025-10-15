@@ -98,7 +98,9 @@ def get_log_prob_fn(
         if automatic_transform_enabled:
             transforms[name] = biject_to(fn.support).inv
         else:
-            transforms[name] = dist.transforms.IndependentTransform(dist.transforms.identity_transform, 1)
+            transforms[name] = dist.transforms.IndependentTransform(
+                dist.transforms.identity_transform, 1
+            )
 
     if implementation == "pyro":
         trace_prob_evaluator = TraceEinsumEvaluator(
@@ -144,49 +146,6 @@ def get_log_prob_fn(
         raise NotImplementedError
 
     return lp_fn, transforms
-
-
-def get_log_prob_grad_fn(
-    model,
-    model_args=(),
-    model_kwargs={},
-    implementation="pyro",
-    automatic_transform_enabled=False,
-    transforms=None,
-    max_plate_nesting=None,
-    jit_compile=False,
-    jit_options=None,
-    skip_jit_warnings=False,
-    **kwargs,
-) -> (Callable, Dict[str, Any]):
-    """
-    Given a Python callable with Pyro primitives, generates the following model-specific
-    functions:
-    - a log prob grad function whose input are parameters and whose
-      output is the grd of log prob of the model wrt parameters
-    - transforms to transform latent sites of `model` to
-      unconstrained space
-
-    Args:
-        See `get_log_prob_fn`
-
-    Returns:
-        `log_prob_grad_fn` and `transforms`
-    """
-    lp_fn, transforms = get_log_prob_fn(
-        model,
-        model_args,
-        model_kwargs,
-        implementation,
-        automatic_transform_enabled,
-        transforms,
-        max_plate_nesting,
-        jit_compile,
-        jit_options,
-        skip_jit_warnings,
-    )
-    lp_grad_fn = make_log_prob_grad_fn(lp_fn)
-    return lp_grad_fn, transforms
 
 
 class _LPMaker:
@@ -243,45 +202,6 @@ class _LPMaker:
             jit_options = {"check_trace": False} if jit_options is None else jit_options
             return partial(self._lp_fn_jit, skip_jit_warnings, jit_options)
         return self._lp_fn
-
-
-def make_log_prob_grad_fn(log_prob_fn):
-    """Makes `log_prob_grad_fn`
-
-    Args:
-        log_prob_fn: python callable that takes in a dictionary of parameters
-        and returns the log prob.
-
-    Returns:
-        `log_prob_grad_fn`
-
-    :param dict z: dictionary of parameter values keyed by site name.
-    :return: tuple of `(z_grads, log_prob)`, where `z_grads` is a dictionary
-        with the same keys as `z` containing gradients and log prob is a
-        torch scalar.
-    """
-
-    def log_prob_grad_fn(z):
-        z_keys, z_nodes = zip(*z.items())
-        for node in z_nodes:
-            node.requires_grad_(True)
-        try:
-            log_prob = log_prob_fn(z)
-
-        # deal with singular matrices
-        except RuntimeError as e:
-            if "singular U" in str(e):
-                grads = {k: v.new_zeros(v.shape) for k, v in z.items()}
-                return grads, z_nodes[0].new_tensor(float("nan"))
-            else:
-                raise e
-
-        grads = grad(log_prob, z_nodes)
-        for node in z_nodes:
-            node.requires_grad_(False)
-        return dict(zip(z_keys, grads)), log_prob.detach()
-
-    return log_prob_grad_fn
 
 
 class TraceEinsumEvaluator:

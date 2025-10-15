@@ -1,0 +1,17 @@
+# @package hydra.launcher
+#
+# SLURM launcher: 1 job per GPU, specify node via command line.
+#
+# Usage:
+#   python scripts/run_benchmark.py +experiment=benchmark \
+#     hydra/launcher=slurm_gpu \
+#     +hydra.launcher.additional_parameters.nodelist=<nodename> \
+#     -m
+
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+gpus_per_node: 1
+tasks_per_node: 1
+nodelist: null
+timeout_min: null
+array_parallelism: 4  # max concurrent jobs (= number of GPUs on the node)

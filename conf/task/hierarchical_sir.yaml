@@ -1,0 +1,4 @@
+
+name: hierarchical_sir
+bottom_up_sample_batch_size: 1000
+bottom_up_posterior_sample_batch_size: 100

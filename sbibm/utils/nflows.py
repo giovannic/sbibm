@@ -323,7 +323,11 @@ class FlowWrapper:
         self.transform = transform
 
     def sample(self, *args, **kwargs):
-        Y = self.flow.sample(*args, **kwargs)
+        if 'x' in kwargs:
+            Y = self.flow.sample_batched((1,), **kwargs)[0]
+        else:
+            Y = self.flow.sample(*args, **kwargs)
+
         return self.transform.inv(Y)
 
     def log_prob(self, parameters_constrained):

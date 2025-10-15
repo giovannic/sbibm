@@ -13,55 +13,43 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
     Returns:
         Task instance
     """
-    if task_name == "lotka_volterra":
-        from sbibm.tasks.lotka_volterra.task import LotkaVolterra
+    if task_name == "hierarchical_two_moons":
+        from sbibm.tasks.hierarchical_two_moons.task import (
+            HierarchicalTwoMoons,
+        )
 
-        return LotkaVolterra(*args, **kwargs)
+        return HierarchicalTwoMoons(*args, **kwargs)
 
-    elif task_name == "bernoulli_glm":
-        from sbibm.tasks.bernoulli_glm.task import BernoulliGLM
+    elif task_name == "hierarchical_gaussian_mixture":
+        from sbibm.tasks.hierarchical_gaussian_mixture.task import (
+            HierarchicalGaussianMixture,
+        )
 
-        return BernoulliGLM(*args, **kwargs)
+        return HierarchicalGaussianMixture(*args, **kwargs)
 
-    elif task_name == "bernoulli_glm_raw":
-        from sbibm.tasks.bernoulli_glm.task import BernoulliGLM
+    elif task_name == "hierarchical_gaussian_linear":
+        from sbibm.tasks.hierarchical_gaussian_linear.task import (
+            HierarchicalGaussianLinear,
+        )
 
-        return BernoulliGLM(*args, summary="raw", **kwargs)
+        return HierarchicalGaussianLinear(*args, **kwargs)
 
-    elif task_name == "gaussian_linear":
-        from sbibm.tasks.gaussian_linear.task import GaussianLinear
+    elif task_name == "hierarchical_slcp":
+        from sbibm.tasks.hierarchical_slcp.task import HierarchicalSLCP
 
-        return GaussianLinear(*args, **kwargs)
+        return HierarchicalSLCP(*args, **kwargs)
 
-    elif task_name == "gaussian_linear_uniform":
-        from sbibm.tasks.gaussian_linear_uniform.task import GaussianLinearUniform
+    elif task_name == "hierarchical_gaussian_linear_uniform":
+        from sbibm.tasks.hierarchical_gaussian_linear_uniform.task import (
+            HierarchicalGaussianLinearUniform,
+        )
 
-        return GaussianLinearUniform(*args, **kwargs)
+        return HierarchicalGaussianLinearUniform(*args, **kwargs)
 
-    elif task_name == "gaussian_mixture":
-        from sbibm.tasks.gaussian_mixture.task import GaussianMixture
+    elif task_name == "hierarchical_sir":
+        from sbibm.tasks.hierarchical_sir.task import HierarchicalSIR
 
-        return GaussianMixture(*args, **kwargs)
-
-    elif task_name == "slcp" or task_name == "gaussian_nonlinear":
-        from sbibm.tasks.slcp.task import SLCP
-
-        return SLCP(*args, **kwargs)
-
-    elif task_name == "slcp_distractors":
-        from sbibm.tasks.slcp.task import SLCP
-
-        return SLCP(*args, distractors=True, **kwargs)
-
-    if task_name == "sir":
-        from sbibm.tasks.sir.task import SIR
-
-        return SIR(*args, **kwargs)
-
-    elif task_name == "two_moons":
-        from sbibm.tasks.two_moons.task import TwoMoons
-
-        return TwoMoons(*args, **kwargs)
+        return HierarchicalSIR(*args, **kwargs)
 
     else:
         raise NotImplementedError()
@@ -79,5 +67,4 @@ def get_available_tasks() -> List[str]:
     """
     task_dir = Path(__file__).parent.absolute()
     tasks = [f.name for f in task_dir.glob("*") if f.is_dir() and f.name[0] != "_"]
-    tasks_extra = ["slcp_distractors", "bernoulli_glm_raw"]
-    return tasks + tasks_extra
+    return tasks
