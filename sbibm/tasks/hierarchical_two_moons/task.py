@@ -5,6 +5,8 @@ from typing import Any, Callable, Dict, Optional
 import pyro
 import torch
 from pyro import distributions as pdist
+from pyro.distributions import constraints
+from pyro.distributions.transforms import biject_to
 from pyro.infer.mcmc import NUTS
 from sbi.samplers.mcmc.mcmc import MCMC
 
@@ -111,6 +113,26 @@ class HierarchicalTwoMoons(Task):
             global_dist, local_dist_fn, dim_global=4, dim_local=2 * n_l
         )
         self.prior_dist.set_default_validate_args(False)
+
+        # Build composite transform for MCMC (constrained <-> unconstrained)
+        # This maps between constrained parameter space and unconstrained R^n
+        transforms_list = []
+
+        # global_loc: Uniform[-1, 1] <-> R
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
+
+        # global_scale: HalfNormal (R+) <-> R
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # local params: Normal (R) <-> R (identity)
+        for _ in range(2 * n_l):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
+
+        self.composite_transform = torch.distributions.transforms.StackTransform(
+            transforms_list, dim=-1
+        )
 
     def get_prior(self):
         """Get prior distribution.
@@ -306,11 +328,64 @@ class HierarchicalTwoMoons(Task):
 
         return {"parameters": composite_transform}
 
+    def _get_potential_fn(
+        self,
+        observation: torch.Tensor,
+    ):
+        """Create potential function for NUTS with reparameterization.
+
+        The potential function maps unconstrained parameters (R^n) to
+        negative unnormalized log posterior, handling transforms and
+        Jacobian corrections.
+
+        Args:
+            observation: Observed data
+
+        Returns:
+            Callable potential function
+        """
+
+        def potential_fn(z_unconstrained):
+            """Compute negative unnormalized log posterior.
+
+            Args:
+                z_unconstrained: Dict with 'parameters' key, unconstrained
+
+            Returns:
+                Negative log posterior (potential energy)
+            """
+            z = z_unconstrained["parameters"]
+
+            # Transform to constrained space
+            theta_constrained = self.composite_transform(z)
+
+            # Compute log prior in constrained space
+            log_prior = self.prior_dist.log_prob(theta_constrained)
+
+            # Compute log likelihood in constrained space
+            log_likelihood = self._likelihood(theta_constrained, observation, log=True)
+
+            # Compute Jacobian correction
+            log_abs_det_jacobian = self.composite_transform.log_abs_det_jacobian(
+                z, theta_constrained
+            )
+
+            # Potential = -(log_prior + log_likelihood + log|det J|)
+            # The Jacobian accounts for change of variables
+            log_posterior = log_prior + log_likelihood + log_abs_det_jacobian
+
+            return -log_posterior.sum()
+
+        return potential_fn
+
     def _sample_reference_posterior(
         self,
         num_samples: int,
         num_observation: Optional[int] = None,
         observation: Optional[torch.Tensor] = None,
+        num_chains: int = 5,
+        num_warmup: int = 5000,
+        thinning: int = 1,
     ) -> torch.Tensor:
         """Sample reference posterior using MCMC.
 
@@ -322,6 +397,9 @@ class HierarchicalTwoMoons(Task):
             num_samples: Number of samples to generate
             num_observation: Observation number to load
             observation: Observation tensor, alternative to num_observation
+            num_chains: Number of MCMC chains (default: 5)
+            num_warmup: Number of warmup steps (default: 5000)
+            thinning: Thinning factor (default: 1)
 
         Returns:
             Samples from reference posterior (num_samples, dim_parameters)
@@ -333,33 +411,33 @@ class HierarchicalTwoMoons(Task):
             f"Running MCMC for observation {num_observation} " f"with n_l={self.n_l}"
         )
 
-        # Prepare model and transforms
-        conditioned_model = self._get_pyro_model(
-            num_observation=num_observation, observation=observation
-        )
-        transforms = self._get_transforms(
-            num_observation=num_observation,
-            observation=observation,
-            automatic_transforms_enabled=True,
-        )
+        # Get observation
+        if observation is None:
+            observation = self.get_observation(num_observation=num_observation)
 
-        # Set up NUTS kernel
+        # Create potential function with reparameterization
+        potential_fn = self._get_potential_fn(observation=observation)
+
+        # Set up NUTS kernel with potential function
+        # No need to pass transforms since potential_fn handles them internally
         kernel_parameters = {
             "jit_compile": False,
-            "transforms": transforms,
         }
-        mcmc_kernel = NUTS(model=conditioned_model, **kernel_parameters)
+        mcmc_kernel = NUTS(potential_fn=potential_fn, **kernel_parameters)
 
-        # Set up MCMC
-        num_chains = 5
-        num_warmup = 5000
-        thinning = 1
+        # Initialize at prior samples (in unconstrained space)
+        init_params_constrained = self.prior_dist.sample((num_chains,))
+        init_params_unconstrained = self.composite_transform.inv(
+            init_params_constrained
+        )
+        initial_params = {"parameters": init_params_unconstrained}
+
         mcmc_parameters = {
             "num_chains": num_chains,
             "num_samples": thinning * num_samples,
             "warmup_steps": num_warmup,
             "available_cpu": 1,
-            "initial_params": None,
+            "initial_params": initial_params,
         }
 
         mcmc = MCMC(mcmc_kernel, **mcmc_parameters)
@@ -370,19 +448,24 @@ class HierarchicalTwoMoons(Task):
         # Apply thinning
         mcmc._samples = {"parameters": mcmc._samples["parameters"][:, ::thinning, :]}
 
-        # Get samples
+        # Get samples (these are in unconstrained space from NUTS)
         num_samples_available = (
             mcmc._samples["parameters"].shape[0] * mcmc._samples["parameters"].shape[1]
         )
         if num_samples_available < num_samples:
             log.warning("Some samples will be included multiple times")
-            samples = mcmc.get_samples(num_samples=num_samples, group_by_chain=False)[
+            samples_unconstrained = mcmc.get_samples(
+                num_samples=num_samples, group_by_chain=False
+            )["parameters"].squeeze()
+        else:
+            samples_unconstrained = mcmc.get_samples(group_by_chain=False)[
                 "parameters"
             ].squeeze()
-        else:
-            samples = mcmc.get_samples(group_by_chain=False)["parameters"].squeeze()
-            idx = torch.randperm(samples.shape[0])[:num_samples]
-            samples = samples[idx, :]
+            idx = torch.randperm(samples_unconstrained.shape[0])[:num_samples]
+            samples_unconstrained = samples_unconstrained[idx, :]
+
+        # Transform samples back to constrained space (unconstrained -> constrained)
+        samples = self.composite_transform(samples_unconstrained)
 
         # Extract convergence diagnostics
         diagnostics = mcmc.diagnostics()
