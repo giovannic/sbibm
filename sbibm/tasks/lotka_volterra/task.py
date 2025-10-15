@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import gc
 from pathlib import Path
 from typing import Callable, List, Optional
 
 import pyro
 import torch
-from diffeqtorch import DiffEq
+from torchdiffeq import odeint
 from pyro import distributions as pdist
 
 import sbibm  # noqa -- needed for setting sysimage path
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
-from sbibm.utils.decorators import lazy_property
 
 
 class LotkaVolterra(Task):
@@ -91,20 +89,30 @@ class LotkaVolterra(Task):
         # NOTE: For subsample statistic
         self.total_count = 1000  # TODO: Value?
 
-    @lazy_property
-    def de(self):
-        return DiffEq(
-            f=f"""
-            function f(du,u,p,t)
-                x, y = u
-                alpha, beta, gamma, delta = p
-                du[1] = alpha * x - beta * x * y
-                du[2] = -gamma * y + delta * x * y
-            end
-            """,
-            saveat=self.saveat,
-            debug=False,  # 5
+    def _lotka_volterra_ode(
+        self, t: torch.Tensor, u: torch.Tensor
+    ) -> torch.Tensor:
+        """Lotka-Volterra ODE right-hand side function
+
+        Args:
+            t: Time (scalar)
+            u: State vector [prey, predator]
+
+        Returns:
+            du/dt: State derivatives [dx, dy]
+        """
+        x, y = u[0], u[1]
+        alpha, beta, gamma, delta = (
+            self._current_params[0],
+            self._current_params[1],
+            self._current_params[2],
+            self._current_params[3],
         )
+
+        dx = alpha * x - beta * x * y
+        dy = -gamma * y + delta * x * y
+
+        return torch.stack([dx, dy])
 
     def get_labels_parameters(self) -> List[str]:
         """Get list containing parameter labels"""
@@ -134,17 +142,25 @@ class LotkaVolterra(Task):
         def simulator(parameters):
             num_samples = parameters.shape[0]
 
+            # Generate time points for ODE integration
+            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+
             us = []
             for num_sample in range(num_samples):
-                u, t = self.de(self.u0, self.tspan, parameters[num_sample, :])
+                # Store current parameters for ODE function to access
+                self._current_params = parameters[num_sample, :]
+
+                # Solve ODE using torchdiffeq
+                # odeint returns shape (time_steps, state_dim)
+                u_trajectory = odeint(
+                    self._lotka_volterra_ode, self.u0, t, method="dopri5"
+                )
+                # Transpose to (state_dim, time_steps) to match format
+                u = u_trajectory.T
 
                 if u.shape != torch.Size([2, int(self.dim_data_raw / 2)]):
                     u = float("nan") * torch.ones((2, int(self.dim_data_raw / 2)))
                     u = u.double()
-
-                if num_sample % 100 == 0:
-                    gc.collect()
-                    self.de.jl.eval("Base.GC.gc()")
 
                 us.append(u.reshape(1, 2, -1))
             us = torch.cat(us).float()  # num_parameters x 2 x (days/saveat + 1)
