@@ -4,13 +4,12 @@ from typing import Callable, List, Optional
 
 import pyro
 import torch
-from diffeqtorch import DiffEq
+from torchdiffeq import odeint
 from pyro import distributions as pdist
 
 import sbibm  # noqa -- needed for setting sysimage path
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
-from sbibm.utils.decorators import lazy_property
 
 
 class SIR(Task):
@@ -94,21 +93,24 @@ class SIR(Task):
         self.saveat = saveat
         self.N = N
 
-    @lazy_property
-    def de(self):
-        return DiffEq(
-            f=f"""
-            function f(du,u,p,t)
-                S,I,R = u
-                b,g = p
-                du[1] = -b * S * I / {self.N}
-                du[2] = b * S * I / {self.N} - g * I
-                du[3] = g * I
-            end
-            """,
-            saveat=self.saveat,
-            debug=False,  # 5
-        )
+    def _sir_ode(self, t: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """SIR ODE right-hand side function
+
+        Args:
+            t: Time (scalar)
+            u: State vector [S, I, R]
+
+        Returns:
+            du/dt: State derivatives [dS, dI, dR]
+        """
+        S, I, R = u[0], u[1], u[2]
+        beta, gamma = self._current_params[0], self._current_params[1]
+
+        dS = -beta * S * I / self.N
+        dI = beta * S * I / self.N - gamma * I
+        dR = gamma * I
+
+        return torch.stack([dS, dI, dR])
 
     def get_labels_parameters(self) -> List[str]:
         """Get list containing parameter labels"""
@@ -138,9 +140,21 @@ class SIR(Task):
         def simulator(parameters):
             num_samples = parameters.shape[0]
 
+            # Generate time points for ODE integration
+            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+
             us = []
             for num_sample in range(num_samples):
-                u, t = self.de(self.u0, self.tspan, parameters[num_sample, :])
+                # Store current parameters for ODE function to access
+                self._current_params = parameters[num_sample, :]
+
+                # Solve ODE using torchdiffeq
+                # odeint returns shape (time_steps, state_dim)
+                u_trajectory = odeint(
+                    self._sir_ode, self.u0, t, method="dopri5"
+                )
+                # Transpose to (state_dim, time_steps) to match format
+                u = u_trajectory.T
 
                 if u.shape != torch.Size([3, int(self.dim_data_raw / 3)]):
                     u = float("nan") * torch.ones((3, int(self.dim_data_raw / 3)))
