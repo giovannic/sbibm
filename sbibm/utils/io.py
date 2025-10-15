@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Iterable, Optional, Union
+from typing import Any, Dict, Iterable, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -84,3 +84,33 @@ def save_tensor_to_csv(
         data.cpu().numpy().astype(dtype),
         columns=columns,
     ).to_csv(path, index=index)
+
+
+def save_convergence_stats(path: Union[str, Path], stats_dict: Dict[str, Any]) -> None:
+    """Save MCMC convergence statistics to CSV.
+
+    Saves R-hat, ESS, and other convergence diagnostics for hierarchical
+    tasks. The stats_dict should contain parameter names as keys and
+    convergence metrics as values.
+
+    Args:
+        path: Path to save the convergence stats CSV
+        stats_dict: Dictionary mapping metric names to values
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df = pd.DataFrame([stats_dict])
+    df.to_csv(path, index=False)
+
+
+def load_convergence_stats(path: Union[str, Path]) -> Dict[str, Any]:
+    """Load MCMC convergence statistics from CSV.
+
+    Args:
+        path: Path to the convergence stats CSV
+
+    Returns:
+        Dictionary containing convergence statistics
+    """
+    df = pd.read_csv(path)
+    return df.iloc[0].to_dict()
