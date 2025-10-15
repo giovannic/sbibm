@@ -19,7 +19,7 @@ Assuming you have a working Python environment, simply install `sbibm` via `pip`
 $ pip install sbibm
 ```
 
-ODE based models (currently SIR and Lotka-Volterra models) use [Julia](https://julialang.org) via [`diffeqtorch`](https://github.com/sbi-benchmark/diffeqtorch). If you are planning to use these tasks, please additionally follow the [installation instructions of `diffeqtorch`](https://github.com/sbi-benchmark/diffeqtorch#installation). If you are not planning to simulate these tasks for now, you can skip this step.
+ODE based models (currently SIR and Lotka-Volterra models) use PyTorch's native `torchdiffeq` library, which is included as a dependency.
 
 ## Quickstart
 
