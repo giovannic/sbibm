@@ -5,7 +5,10 @@ from typing import Any, Callable, Dict, Optional
 import pyro
 import torch
 from pyro import distributions as pdist
+from pyro.infer.mcmc import NUTS
+from sbi.samplers.mcmc.mcmc import MCMC
 
+import sbibm
 from sbibm.tasks.hierarchical_utilities import (
     BlockwiseDistribution,
     HierarchicalDistribution,
@@ -13,6 +16,7 @@ from sbibm.tasks.hierarchical_utilities import (
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 from sbibm.tasks.two_moons.task import TwoMoons
+from sbibm.utils.io import save_convergence_stats
 
 
 class HierarchicalTwoMoons(Task):
@@ -254,3 +258,167 @@ class HierarchicalTwoMoons(Task):
         total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
 
         return total_log_likelihood if log else torch.exp(total_log_likelihood)
+
+    def _get_transforms(
+        self,
+        automatic_transforms_enabled: bool = True,
+        **kwargs,
+    ):
+        """Get transforms for MCMC.
+
+        For hierarchical two moons:
+        - global_loc parameters (dims 0-1): No transform (R^2)
+        - global_scale parameters (dims 2-3): ExpTransform (R+ -> R)
+        - local parameters (dims 4+): No transform (R^(2*n_l))
+
+        Args:
+            automatic_transforms_enabled: Whether to use automatic transforms
+
+        Returns:
+            Dictionary of transforms
+        """
+        if not automatic_transforms_enabled:
+            return {
+                "parameters": torch.distributions.transforms.IndependentTransform(
+                    torch.distributions.transforms.identity_transform, 1
+                )
+            }
+
+        # Create composite transform:
+        # Identity for locs, Exp for scales, Identity for local params
+        transforms_list = []
+
+        # global_loc_0, global_loc_1: identity
+        transforms_list.extend([torch.distributions.transforms.identity_transform] * 2)
+
+        # global_scale_0, global_scale_1: exp
+        transforms_list.extend([torch.distributions.transforms.ExpTransform()] * 2)
+
+        # local params: identity
+        transforms_list.extend(
+            [torch.distributions.transforms.identity_transform] * (2 * self.n_l)
+        )
+
+        # Stack into composite transform
+        composite_transform = torch.distributions.transforms.StackTransform(
+            transforms_list, dim=-1
+        )
+
+        return {"parameters": composite_transform}
+
+    def _sample_reference_posterior(
+        self,
+        num_samples: int,
+        num_observation: Optional[int] = None,
+        observation: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Sample reference posterior using MCMC.
+
+        Uses Pyro's NUTS sampler with multiple chains to generate reference
+        posterior samples. Computes and saves convergence diagnostics
+        (R-hat, ESS).
+
+        Args:
+            num_samples: Number of samples to generate
+            num_observation: Observation number to load
+            observation: Observation tensor, alternative to num_observation
+
+        Returns:
+            Samples from reference posterior (num_samples, dim_parameters)
+        """
+        log = sbibm.get_logger(__name__)
+
+        # Run MCMC with NUTS sampler
+        log.info(
+            f"Running MCMC for observation {num_observation} " f"with n_l={self.n_l}"
+        )
+
+        # Prepare model and transforms
+        conditioned_model = self._get_pyro_model(
+            num_observation=num_observation, observation=observation
+        )
+        transforms = self._get_transforms(
+            num_observation=num_observation,
+            observation=observation,
+            automatic_transforms_enabled=True,
+        )
+
+        # Set up NUTS kernel
+        kernel_parameters = {
+            "jit_compile": False,
+            "transforms": transforms,
+        }
+        mcmc_kernel = NUTS(model=conditioned_model, **kernel_parameters)
+
+        # Set up MCMC
+        num_chains = 5
+        num_warmup = 5000
+        thinning = 1
+        mcmc_parameters = {
+            "num_chains": num_chains,
+            "num_samples": thinning * num_samples,
+            "warmup_steps": num_warmup,
+            "available_cpu": 1,
+            "initial_params": None,
+        }
+
+        mcmc = MCMC(mcmc_kernel, **mcmc_parameters)
+        mcmc.run()
+
+        log.info("MCMC complete, extracting samples and diagnostics")
+
+        # Apply thinning
+        mcmc._samples = {"parameters": mcmc._samples["parameters"][:, ::thinning, :]}
+
+        # Get samples
+        num_samples_available = (
+            mcmc._samples["parameters"].shape[0] * mcmc._samples["parameters"].shape[1]
+        )
+        if num_samples_available < num_samples:
+            log.warning("Some samples will be included multiple times")
+            samples = mcmc.get_samples(num_samples=num_samples, group_by_chain=False)[
+                "parameters"
+            ].squeeze()
+        else:
+            samples = mcmc.get_samples(group_by_chain=False)["parameters"].squeeze()
+            idx = torch.randperm(samples.shape[0])[:num_samples]
+            samples = samples[idx, :]
+
+        # Extract convergence diagnostics
+        diagnostics = mcmc.diagnostics()
+        r_hat = diagnostics["parameters"]["r_hat"].squeeze()
+        n_eff = diagnostics["parameters"]["n_eff"].squeeze()
+
+        # Log warnings for poor convergence
+        if r_hat.max() > 1.01:
+            log.warning(
+                f"Some parameters have R-hat > 1.01. " f"Max R-hat: {r_hat.max():.4f}"
+            )
+            for i, r in enumerate(r_hat):
+                if r > 1.01:
+                    log.warning(f"  Parameter {i}: R-hat = {r:.4f}")
+
+        # Save convergence statistics
+        if num_observation is not None:
+            stats_dict = {}
+            for i in range(len(r_hat)):
+                stats_dict[f"r_hat_param_{i}"] = float(r_hat[i])
+                stats_dict[f"n_eff_param_{i}"] = float(n_eff[i])
+            stats_dict["max_r_hat"] = float(r_hat.max())
+            stats_dict["min_n_eff"] = float(n_eff.min())
+
+            convergence_stats_path = (
+                self.path
+                / "files"
+                / f"num_observation_{num_observation}"
+                / "convergence_stats.csv"
+            )
+            save_convergence_stats(convergence_stats_path, stats_dict)
+            log.info(f"Saved convergence stats to {convergence_stats_path}")
+
+        return samples
+
+
+if __name__ == "__main__":
+    task = HierarchicalTwoMoons(n_l=5)
+    task._setup(n_jobs=4, create_reference=True)
