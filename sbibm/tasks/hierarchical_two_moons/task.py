@@ -1,10 +1,15 @@
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 
+import pyro
 import torch
 from pyro import distributions as pdist
 
+from sbibm.tasks.hierarchical_utilities import (
+    BlockwiseDistribution,
+    HierarchicalDistribution,
+)
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 from sbibm.tasks.two_moons.task import TwoMoons
@@ -68,38 +73,49 @@ class HierarchicalTwoMoons(Task):
             "r_scale": 0.01,
         }
 
+        # Define hierarchical prior distribution
+        # Global parameters: [loc_0, loc_1, scale_0, scale_1]
+        global_loc_dist = pdist.Uniform(-1.0, 1.0).expand([2]).to_event(1)
+        global_scale_dist = pdist.HalfNormal(0.5).expand([2]).to_event(1)
+        global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
+
+        # Local params distribution conditioned on global
+        def local_dist_fn(global_params):
+            # global_params shape: [..., 4]
+            # Extract locs and scales
+            locs = global_params[..., :2]  # [..., 2]
+            scales = global_params[..., 2:4]  # [..., 2]
+
+            # Create distribution for all local params (2*n_l dims)
+            # Each local param (2D) is Normal(loc, scale)
+            # Replicate locs and scales for n_l contexts
+            batch_shape = global_params.shape[:-1]
+            locs_expanded = (
+                locs.unsqueeze(-2)
+                .expand(list(batch_shape) + [n_l, 2])
+                .reshape(list(batch_shape) + [2 * n_l])
+            )
+            scales_expanded = (
+                scales.unsqueeze(-2)
+                .expand(list(batch_shape) + [n_l, 2])
+                .reshape(list(batch_shape) + [2 * n_l])
+            )
+
+            return pdist.Independent(pdist.Normal(locs_expanded, scales_expanded), 1)
+
+        self.prior_dist = HierarchicalDistribution(
+            global_dist, local_dist_fn, dim_global=4, dim_local=2 * n_l
+        )
+        self.prior_dist.set_default_validate_args(False)
+
     def get_prior(self):
         """Get prior distribution.
 
-        Returns a callable that samples from the hierarchical prior:
-        - Global locs: Uniform(-1, 1) for each dimension
-        - Global scales: HalfNormal(0.5) for each dimension
-        - Local params: Normal(global_loc, global_scale) for each context
+        Returns a callable that samples from self.prior_dist using pyro.
         """
 
         def prior(num_samples=1):
-            # Sample global location parameters: Uniform(-1, 1)
-            global_locs = pdist.Uniform(-1.0, 1.0).sample((num_samples, 2))
-
-            # Sample global scale parameters: HalfNormal(0.5)
-            global_scales = pdist.HalfNormal(0.5).sample((num_samples, 2))
-
-            # Sample local parameters for each context
-            # Each local param is 2D, drawn from Normal(global_loc, global_scale)
-            local_params = []
-            for i in range(self.n_l):
-                # Sample 2D parameters for context i
-                local_param = torch.normal(global_locs, global_scales)
-                local_params.append(local_param)
-
-            # Concatenate: [global_locs (2), global_scales (2), local_params
-            # (2*n_l)]
-            local_params_flat = torch.cat(local_params, dim=1)
-            parameters = torch.cat(
-                [global_locs, global_scales, local_params_flat], dim=1
-            )
-
-            return parameters
+            return pyro.sample("parameters", self.prior_dist.expand_by([num_samples]))
 
         return prior
 
@@ -169,3 +185,72 @@ class HierarchicalTwoMoons(Task):
             return observations
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
+
+    def _likelihood(
+        self,
+        parameters: torch.Tensor,
+        data: torch.Tensor,
+        log: bool = True,
+    ) -> torch.Tensor:
+        """Compute likelihood of data given parameters.
+
+        For hierarchical two moons, the likelihood is the product of
+        independent likelihoods for each local context.
+
+        Args:
+            parameters: Parameter tensor (batch_size, dim_parameters)
+            data: Observation tensor (batch_size, dim_data)
+            log: If True, return log-likelihood
+
+        Returns:
+            (Log-)likelihood values
+        """
+        if parameters.ndim == 1:
+            parameters = parameters.reshape(1, -1)
+
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+
+        assert parameters.shape[1] == self.dim_parameters
+        assert data.shape[1] == self.dim_data
+
+        batch_size = parameters.shape[0]
+
+        # Split parameters: global [:, 0:4], local [:, 4:]
+        local_params = parameters[:, 4:].reshape(batch_size, self.n_l, 2)
+
+        # Split data into n_l observations (each 2D)
+        data_split = data.reshape(batch_size, self.n_l, 2)
+
+        # Compute likelihood for each context and sum log-likelihoods
+        log_likelihoods = []
+        for i in range(self.n_l):
+            # Extract local parameters and data for context i
+            context_params = local_params[:, i, :]  # (batch_size, 2)
+            context_data = data_split[:, i, :]  # (batch_size, 2)
+
+            # Use original two_moons likelihood logic
+            p = TwoMoons._map_fun_inv(context_params, context_data)
+            if p.ndim == 1:
+                p = p.reshape(1, -1)
+
+            u = p[:, 0] - self.simulator_params["base_offset"]
+            v = p[:, 1]
+
+            r = torch.sqrt(u**2 + v**2)
+            log_lik_context = -0.5 * (
+                (r - self.simulator_params["r_loc"]) / self.simulator_params["r_scale"]
+            ) ** 2 - 0.5 * torch.log(
+                2 * torch.tensor([math.pi]) * self.simulator_params["r_scale"] ** 2
+            )
+
+            # Handle invalid region (u < 0)
+            if len(torch.where(u < 0.0)[0]) > 0:
+                log_lik_context[torch.where(u < 0.0)[0]] = -torch.tensor(math.inf)
+
+            log_likelihoods.append(log_lik_context)
+
+        # Sum log-likelihoods across contexts (product of likelihoods)
+        total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
+
+        return total_log_likelihood if log else torch.exp(total_log_likelihood)

@@ -90,3 +90,43 @@ def test_prior_structure():
     # Remaining 2*n_l params are local: should be roughly Normal-distributed
     local_params = samples[:, 4:]
     assert local_params.shape[1] == 2 * n_l
+
+
+def test_likelihood():
+    """Test likelihood computation."""
+    n_l = 3
+    task = HierarchicalTwoMoons(n_l=n_l)
+    prior = task.get_prior()
+    simulator = task.get_simulator()
+
+    # Generate some parameters and data
+    parameters = prior(num_samples=5)
+    data = simulator(parameters)
+
+    # Compute likelihood
+    log_lik = task._likelihood(parameters, data, log=True)
+    assert log_lik.shape == torch.Size([5])
+    assert not torch.isnan(log_lik).any()
+    assert torch.all(torch.isfinite(log_lik) | torch.isneginf(log_lik))
+
+    # Non-log likelihood
+    lik = task._likelihood(parameters, data, log=False)
+    assert lik.shape == torch.Size([5])
+    assert not torch.isnan(lik).any()
+    assert (lik >= 0).all()
+
+
+def test_prior_dist_log_prob():
+    """Test prior distribution log_prob."""
+    n_l = 3
+    task = HierarchicalTwoMoons(n_l=n_l)
+    prior = task.get_prior()
+
+    # Sample from prior
+    samples = prior(num_samples=10)
+
+    # Compute log_prob via prior_dist
+    log_probs = task.prior_dist.log_prob(samples)
+    assert log_probs.shape == torch.Size([10])
+    assert not torch.isnan(log_probs).any()
+    assert torch.all(torch.isfinite(log_probs))
