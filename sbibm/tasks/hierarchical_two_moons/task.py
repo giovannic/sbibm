@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Optional
 
 import pyro
 import torch
@@ -11,9 +11,10 @@ from pyro.infer.mcmc import NUTS
 from sbi.samplers.mcmc.mcmc import MCMC
 
 import sbibm
-from sbibm.tasks.hierarchical_utilities import (
+from sbibm.tasks.distributions import (
     BlockwiseDistribution,
     HierarchicalDistribution,
+    TruncatedNormal,
 )
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
@@ -93,7 +94,7 @@ class HierarchicalTwoMoons(Task):
             scales = global_params[..., 2:4]  # [..., 2]
 
             # Create distribution for all local params (2*n_l dims)
-            # Each local param (2D) is Normal(loc, scale)
+            # Each local param (2D) is TruncatedNormal(loc, scale, -1, 1)
             # Replicate locs and scales for n_l contexts
             batch_shape = global_params.shape[:-1]
             locs_expanded = (
@@ -107,7 +108,9 @@ class HierarchicalTwoMoons(Task):
                 .reshape(list(batch_shape) + [2 * n_l])
             )
 
-            return pdist.Independent(pdist.Normal(locs_expanded, scales_expanded), 1)
+            return pdist.Independent(
+                TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0), 1
+            )
 
         self.prior_dist = HierarchicalDistribution(
             global_dist, local_dist_fn, dim_global=4, dim_local=2 * n_l
@@ -126,9 +129,9 @@ class HierarchicalTwoMoons(Task):
         for _ in range(2):
             transforms_list.append(biject_to(constraints.positive))
 
-        # local params: Normal (R) <-> R (identity)
+        # local params: TruncatedNormal[-1, 1] <-> R
         for _ in range(2 * n_l):
-            transforms_list.append(torch.distributions.transforms.identity_transform)
+            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
 
         self.composite_transform = torch.distributions.transforms.StackTransform(
             transforms_list, dim=-1
@@ -280,53 +283,6 @@ class HierarchicalTwoMoons(Task):
         total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
 
         return total_log_likelihood if log else torch.exp(total_log_likelihood)
-
-    def _get_transforms(
-        self,
-        automatic_transforms_enabled: bool = True,
-        **kwargs,
-    ):
-        """Get transforms for MCMC.
-
-        For hierarchical two moons:
-        - global_loc parameters (dims 0-1): No transform (R^2)
-        - global_scale parameters (dims 2-3): ExpTransform (R+ -> R)
-        - local parameters (dims 4+): No transform (R^(2*n_l))
-
-        Args:
-            automatic_transforms_enabled: Whether to use automatic transforms
-
-        Returns:
-            Dictionary of transforms
-        """
-        if not automatic_transforms_enabled:
-            return {
-                "parameters": torch.distributions.transforms.IndependentTransform(
-                    torch.distributions.transforms.identity_transform, 1
-                )
-            }
-
-        # Create composite transform:
-        # Identity for locs, Exp for scales, Identity for local params
-        transforms_list = []
-
-        # global_loc_0, global_loc_1: identity
-        transforms_list.extend([torch.distributions.transforms.identity_transform] * 2)
-
-        # global_scale_0, global_scale_1: exp
-        transforms_list.extend([torch.distributions.transforms.ExpTransform()] * 2)
-
-        # local params: identity
-        transforms_list.extend(
-            [torch.distributions.transforms.identity_transform] * (2 * self.n_l)
-        )
-
-        # Stack into composite transform
-        composite_transform = torch.distributions.transforms.StackTransform(
-            transforms_list, dim=-1
-        )
-
-        return {"parameters": composite_transform}
 
     def _get_potential_fn(
         self,

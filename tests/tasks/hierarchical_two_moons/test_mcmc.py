@@ -38,6 +38,37 @@ def test_mcmc_sampling_basic(n_l):
     # Check scale parameters are positive (dims 2-3)
     assert (samples[:, 2:4] > 0).all(), "Scale parameters should be positive"
 
+def test_mcmc_sampling_multiple_chains():
+    """Test that MCMC sampling runs and returns valid samples."""
+    n_l = 3
+    task = HierarchicalTwoMoons(n_l=n_l)
+
+    # Generate a test observation
+    prior = task.get_prior()
+    true_params = prior(num_samples=1)
+    simulator = task.get_simulator()
+    observation = simulator(true_params)
+
+    # Run very short MCMC (just to test it works)
+    samples = task._sample_reference_posterior(
+        num_samples=10,
+        observation=observation,
+        num_chains=2,
+        num_warmup=50,
+    )
+
+    # Check shape
+    expected_shape = (10, 4 + 2 * n_l)
+    assert (
+        samples.shape == expected_shape
+    ), f"Expected shape {expected_shape}, got {samples.shape}"
+
+    # Check no NaN or Inf
+    assert not torch.isnan(samples).any(), "Samples contain NaN"
+    assert not torch.isinf(samples).any(), "Samples contain Inf"
+
+    # Check scale parameters are positive (dims 2-3)
+    assert (samples[:, 2:4] > 0).all(), "Scale parameters should be positive"
 
 def test_potential_function():
     """Test that potential function evaluates correctly at true parameters."""

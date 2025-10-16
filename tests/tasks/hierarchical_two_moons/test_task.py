@@ -87,9 +87,11 @@ def test_prior_structure():
     global_scales = samples[:, 2:4]
     assert (global_scales >= 0).all()
 
-    # Remaining 2*n_l params are local: should be roughly Normal-distributed
+    # Remaining 2*n_l params are local: should be TruncatedNormal[-1, 1]
     local_params = samples[:, 4:]
     assert local_params.shape[1] == 2 * n_l
+    assert local_params.min() >= -1.0
+    assert local_params.max() <= 1.0
 
 
 def test_likelihood():

@@ -1,13 +1,209 @@
-"""Tests for hierarchical task utilities."""
+"""Tests for custom distributions and hierarchical task utilities."""
 
 import pytest
 import torch
 from pyro import distributions as pdist
 
-from sbibm.tasks.hierarchical_utilities import (
+from sbibm.tasks.distributions import (
     BlockwiseDistribution,
     HierarchicalDistribution,
+    TruncatedNormal,
 )
+
+# ============================================================================
+# TruncatedNormal Tests
+# ============================================================================
+
+
+def test_truncated_normal_construction():
+    """Test that TruncatedNormal can be constructed."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    assert dist is not None
+    assert dist.low == -1.0
+    assert dist.high == 1.0
+
+
+def test_truncated_normal_invalid_bounds():
+    """Test that construction fails when low >= high."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+
+    # Should raise ValueError when low >= high
+    with pytest.raises(ValueError, match="Lower bound must be less than"):
+        TruncatedNormal(loc, scale, low=1.0, high=-1.0)
+
+    with pytest.raises(ValueError, match="Lower bound must be less than"):
+        TruncatedNormal(loc, scale, low=0.0, high=0.0)
+
+
+def test_truncated_normal_sample_shape():
+    """Test that TruncatedNormal sampling returns correct shapes."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-2.0, high=2.0)
+
+    # Sample without sample_shape
+    sample = dist.sample()
+    assert sample.shape == torch.Size([])
+
+    # Sample with sample_shape
+    samples = dist.sample(torch.Size([100]))
+    assert samples.shape == torch.Size([100])
+
+
+def test_truncated_normal_samples_in_bounds():
+    """Test that all samples are within [low, high]."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    low = -1.5
+    high = 2.0
+    dist = TruncatedNormal(loc, scale, low=low, high=high)
+
+    samples = dist.sample(torch.Size([1000]))
+
+    assert samples.min() >= low
+    assert samples.max() <= high
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+
+def test_truncated_normal_log_prob():
+    """Test log_prob has correct ordering (center more likely than tails)."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    # Test values at different quartiles
+    # Center should be more likely than edges
+    center = torch.tensor(0.0)
+    q1 = torch.tensor(-0.5)
+    q3 = torch.tensor(0.5)
+
+    log_p_center = dist.log_prob(center)
+    log_p_q1 = dist.log_prob(q1)
+    log_p_q3 = dist.log_prob(q3)
+
+    # Center should have higher log prob than quartiles
+    assert log_p_center > log_p_q1
+    assert log_p_center > log_p_q3
+
+    # All should be finite
+    assert torch.isfinite(log_p_center)
+    assert torch.isfinite(log_p_q1)
+    assert torch.isfinite(log_p_q3)
+
+
+def test_truncated_normal_log_prob_out_of_bounds():
+    """Test log_prob returns -inf for values outside bounds."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    # Values outside bounds
+    value_low = torch.tensor(-2.0)
+    value_high = torch.tensor(2.0)
+
+    log_p_low = dist.log_prob(value_low)
+    log_p_high = dist.log_prob(value_high)
+
+    assert torch.isneginf(log_p_low)
+    assert torch.isneginf(log_p_high)
+
+
+def test_truncated_normal_normalization():
+    """Test that distribution approximately integrates to 1."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    # Numerical integration using many samples
+    # Sum of exp(log_prob) * dx should be close to 1
+    x = torch.linspace(-1.0, 1.0, 1000)
+    dx = (x[1] - x[0]).item()
+
+    log_probs = dist.log_prob(x)
+    integral = torch.exp(log_probs).sum() * dx
+
+    # Should be close to 1 (within 1% tolerance)
+    assert torch.abs(integral - 1.0) < 0.01
+
+
+def test_truncated_normal_batch_mode():
+    """Test TruncatedNormal with batched loc and scale."""
+    # Batch of 3 different loc/scale pairs
+    loc = torch.tensor([0.0, 0.5, -0.5])
+    scale = torch.tensor([1.0, 0.5, 1.5])
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    assert dist.batch_shape == torch.Size([3])
+
+    # Sample should have batch dimension
+    sample = dist.sample()
+    assert sample.shape == torch.Size([3])
+
+    # All samples should be in bounds
+    assert (sample >= -1.0).all()
+    assert (sample <= 1.0).all()
+
+    # log_prob should work on batched values
+    values = torch.tensor([0.0, 0.5, -0.5])
+    log_probs = dist.log_prob(values)
+    assert log_probs.shape == torch.Size([3])
+    assert torch.isfinite(log_probs).all()
+
+
+def test_truncated_normal_no_nan():
+    """Test that samples contain no NaN or Inf values."""
+    loc = torch.tensor([0.0, 1.0, -1.0])
+    scale = torch.tensor([0.5, 1.0, 0.3])
+    dist = TruncatedNormal(loc, scale, low=-2.0, high=2.0)
+
+    samples = dist.sample(torch.Size([100]))
+
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+
+def test_truncated_normal_expand():
+    """Test expand method."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    dist = TruncatedNormal(loc, scale, low=-1.0, high=1.0)
+
+    # Expand to batch shape [5]
+    expanded = dist.expand(torch.Size([5]))
+
+    assert expanded.batch_shape == torch.Size([5])
+
+    # Sample from expanded distribution
+    samples = expanded.sample()
+    assert samples.shape == torch.Size([5])
+    assert (samples >= -1.0).all()
+    assert (samples <= 1.0).all()
+
+
+def test_truncated_normal_edge_cases():
+    """Test edge cases like tight bounds."""
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(0.1)  # Small scale
+    dist = TruncatedNormal(loc, scale, low=-0.05, high=0.05)
+
+    samples = dist.sample(torch.Size([100]))
+
+    # All samples should be tightly bounded
+    assert samples.min() >= -0.05
+    assert samples.max() <= 0.05
+
+    # Should have reasonable mean near loc
+    assert torch.abs(samples.mean()) < 0.05
+
+
+# ============================================================================
+# BlockwiseDistribution Tests
+# ============================================================================
 
 
 def test_blockwise_distribution_construction():
@@ -67,6 +263,11 @@ def test_blockwise_distribution_sample_no_nan():
     samples = blockwise_dist.sample(torch.Size([50]))
     assert not torch.isnan(samples).any()
     assert not torch.isinf(samples).any()
+
+
+# ============================================================================
+# HierarchicalDistribution Tests
+# ============================================================================
 
 
 def test_hierarchical_distribution_construction():

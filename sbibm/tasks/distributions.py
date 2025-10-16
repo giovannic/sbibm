@@ -1,9 +1,170 @@
-"""Utilities for hierarchical task implementations."""
+"""Utilities for hierarchical task implementations and custom distributions."""
 
 from typing import Callable, List
 
 import torch
 from pyro.distributions.torch_distribution import TorchDistributionMixin
+
+
+class TruncatedNormal(torch.distributions.Distribution, TorchDistributionMixin):
+    """Truncated Normal distribution using CDF-based methods.
+
+    Implements a Normal distribution truncated to [low, high] using:
+    - Inverse CDF sampling for sample()
+    - CDF normalization for log_prob()
+
+    Args:
+        loc: Mean of the underlying Normal distribution
+        scale: Standard deviation of the underlying Normal distribution
+        low: Lower bound of truncation
+        high: Upper bound of truncation
+    """
+
+    arg_constraints = {
+        "loc": torch.distributions.constraints.real,
+        "scale": torch.distributions.constraints.positive,
+        "low": torch.distributions.constraints.real,
+        "high": torch.distributions.constraints.real,
+    }
+    has_rsample = False
+
+    def __init__(
+        self,
+        loc: torch.Tensor,
+        scale: torch.Tensor,
+        low: float,
+        high: float,
+        validate_args=None,
+    ):
+        """Initialize truncated normal distribution.
+
+        Args:
+            loc: Mean parameter (can be batched)
+            scale: Scale parameter (can be batched)
+            low: Lower truncation bound (scalar)
+            high: Upper truncation bound (scalar)
+            validate_args: Whether to validate arguments
+
+        Raises:
+            ValueError: If low >= high
+        """
+        if low >= high:
+            raise ValueError(
+                f"Lower bound must be less than upper bound, "
+                f"got low={low}, high={high}"
+            )
+
+        self.loc = loc
+        self.scale = scale
+        self.low = torch.tensor(low, dtype=loc.dtype, device=loc.device)
+        self.high = torch.tensor(high, dtype=loc.dtype, device=loc.device)
+
+        # Base normal distribution
+        self.base_dist = torch.distributions.Normal(loc, scale)
+
+        # Compute CDF values at bounds for normalization
+        self._alpha = self.base_dist.cdf(self.low)  # CDF(low)
+        self._beta = self.base_dist.cdf(self.high)  # CDF(high)
+        self._Z = self._beta - self._alpha  # Normalization constant
+
+        # Determine batch and event shape
+        batch_shape = torch.broadcast_shapes(
+            torch.as_tensor(loc).shape, torch.as_tensor(scale).shape
+        )
+
+        super().__init__(batch_shape, torch.Size(), validate_args=validate_args)
+
+    @property
+    def support(self):
+        """Return the support of the distribution."""
+        return torch.distributions.constraints.interval(
+            self.low.item(), self.high.item()
+        )
+
+    def sample(self, sample_shape=torch.Size()):
+        """Sample using inverse CDF method.
+
+        Sample u ~ Uniform(0, 1), then compute:
+        x = ICDF(u * (CDF(high) - CDF(low)) + CDF(low))
+
+        Args:
+            sample_shape: Shape of samples to generate
+
+        Returns:
+            Samples from truncated normal
+        """
+        # Sample from uniform
+        shape = self._extended_shape(sample_shape)
+        u = torch.rand(shape, dtype=self.loc.dtype, device=self.loc.device)
+
+        # Transform to CDF range [alpha, beta]
+        cdf_values = u * self._Z + self._alpha
+
+        # Apply inverse CDF (ICDF = mean + std * sqrt(2) * erf_inv(2*p - 1))
+        # For Normal: ICDF(p) = loc + scale * sqrt(2) * erfinv(2*p - 1)
+        samples = self.loc + self.scale * torch.sqrt(torch.tensor(2.0)) * torch.erfinv(
+            2 * cdf_values - 1
+        )
+
+        return samples
+
+    def log_prob(self, value):
+        """Compute log probability using normalization.
+
+        log p(x) = log N(x | loc, scale) - log Z
+        where Z = CDF(high) - CDF(low)
+
+        Args:
+            value: Values to compute log probability for
+
+        Returns:
+            Log probabilities (or -inf for out-of-bounds values)
+        """
+        # Check bounds
+        in_bounds = (value >= self.low) & (value <= self.high)
+
+        # Compute base log prob
+        log_prob_base = self.base_dist.log_prob(value)
+
+        # Subtract normalization constant
+        log_prob_normalized = log_prob_base - torch.log(self._Z)
+
+        # Set out-of-bounds values to -inf
+        result = torch.where(
+            in_bounds, log_prob_normalized, torch.tensor(float("-inf"))
+        )
+
+        return result
+
+    def expand(self, batch_shape, _instance=None):
+        """Expand the distribution batch shape.
+
+        Args:
+            batch_shape: New batch shape
+            _instance: Instance to use for expansion (internal)
+
+        Returns:
+            Expanded distribution
+        """
+        new = self._get_checked_instance(TruncatedNormal, _instance)
+        batch_shape = torch.Size(batch_shape)
+
+        # Expand loc and scale
+        new.loc = self.loc.expand(batch_shape)
+        new.scale = self.scale.expand(batch_shape)
+        new.low = self.low
+        new.high = self.high
+
+        # Recreate base dist and normalization constants
+        new.base_dist = torch.distributions.Normal(new.loc, new.scale)
+        new._alpha = new.base_dist.cdf(new.low)
+        new._beta = new.base_dist.cdf(new.high)
+        new._Z = new._beta - new._alpha
+
+        super(TruncatedNormal, new).__init__(
+            batch_shape, torch.Size(), validate_args=False
+        )
+        return new
 
 
 class BlockwiseDistribution(torch.distributions.Distribution, TorchDistributionMixin):
