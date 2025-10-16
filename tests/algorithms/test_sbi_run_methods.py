@@ -34,13 +34,18 @@ def test_sbi_api(
             num_chains=100, warmup_steps=100, thin=10, init_strategy="resample"
         )
 
-    predicted, _, _ = run_method(
+    result = run_method(
         task=task,
         num_observation=num_observation,
         num_simulations=num_simulations,
         num_samples=num_samples,
         **kwargs,
     )
+    # Handle different return signatures (snpe returns 4 values, others return 3)
+    if len(result) == 4:
+        predicted, _, _, _ = result
+    else:
+        predicted, _, _ = result
 
     reference_samples = task.get_reference_posterior_samples(
         num_observation=num_observation

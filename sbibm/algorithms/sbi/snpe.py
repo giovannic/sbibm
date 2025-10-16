@@ -30,7 +30,7 @@ def run(
     z_score_x: str = "independent",
     z_score_theta: str = "independent",
     max_num_epochs: Optional[int] = 2**31 - 1,
-) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
+) -> Tuple[torch.Tensor, int, Optional[torch.Tensor], object]:
     """Runs (S)NPE from `sbi`
 
     Args:
@@ -51,7 +51,11 @@ def run(
         max_num_epochs: Maximum number of epochs
 
     Returns:
-        Samples from posterior, number of simulator calls, log probability of true params if computable
+        Tuple of (samples, num_simulations, log_prob_true_params, posterior):
+            - samples: Samples from posterior
+            - num_simulations: Number of simulator calls
+            - log_prob_true_params: Log probability of true params if computable
+            - posterior: Posterior object with sample() and log_prob() methods
     """
     assert not (num_observation is None and observation is None)
     assert not (num_observation is not None and observation is not None)
@@ -128,6 +132,6 @@ def run(
     if num_observation is not None:
         true_parameters = task.get_true_parameters(num_observation=num_observation)
         log_prob_true_parameters = posterior.log_prob(true_parameters)
-        return samples, simulator.num_simulations, log_prob_true_parameters
+        return samples, simulator.num_simulations, log_prob_true_parameters, posterior
     else:
-        return samples, simulator.num_simulations, None
+        return samples, simulator.num_simulations, None, posterior

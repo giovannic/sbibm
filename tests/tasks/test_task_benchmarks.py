@@ -28,7 +28,7 @@ def test_benchmark_metrics_selfobserved(task_name):
     sim = task.get_simulator()
     x_o = sim(theta_o)
 
-    outputs, nsim, logprob_truep = run(
+    outputs, nsim, logprob_truep, posterior = run(
         task,
         observation=x_o,
         num_samples=16,
