@@ -76,14 +76,21 @@ def test_reverse_kl_returns_nan_without_log_prob():
 
 def test_reverse_kl_with_hierarchical_two_moons():
     """Test reverse_kl with hierarchical_two_moons task"""
-    task = get_task("hierarchical_two_moons", n_l=3)
+    task = get_task("hierarchical_two_moons", n_l=5)
 
     # Create a mock posterior with appropriate dimensionality
-    # hierarchical_two_moons has dim_parameters = 4 + 2*n_l = 10
+    # hierarchical_two_moons has dim_parameters = 4 + 2*n_l = 14
+    # Parameters: [loc_0, loc_1, scale_0, scale_1, local_0, ..., local_9]
+    # Constraints: locs in [-1, 1], scales > 0, locals in [-1, 1]
     true_params = task.get_true_parameters(num_observation=1)
+
+    # Use smaller std to keep samples within valid ranges
+    # - Locs and locals are in [-1, 1]: use small std
+    # - Scales need to stay positive: use small std
+    std = torch.ones(task.dim_parameters) * 0.05
     mock_posterior = MockPosterior(
         mean=true_params.squeeze(),
-        std=torch.ones(task.dim_parameters) * 0.1,
+        std=std,
     )
 
     # Compute reverse KL

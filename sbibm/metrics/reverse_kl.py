@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import torch
 
@@ -13,6 +13,7 @@ def reverse_kl(
     task: Task,
     num_observation: int,
     num_samples: int = 10000,
+    invalid_penalty: Optional[float] = 1000.0,
 ) -> torch.Tensor:
     """Estimate reverse KL divergence without reference posterior samples
 
@@ -25,6 +26,9 @@ def reverse_kl(
         task: Task instance
         num_observation: Observation number
         num_samples: Number of samples for Monte Carlo estimation
+        invalid_penalty: Penalty value for samples with invalid log
+            probability (NaN or -inf). Default: 1000.0. Set to None
+            to include invalid samples as-is (will result in NaN).
 
     Returns:
         Estimated reverse KL divergence (lower is better). Returns NaN
@@ -55,7 +59,27 @@ def reverse_kl(
     )
     log_p = log_p_fn(samples)
 
+    # Compute per-sample KL contributions
+    kl_per_sample = log_q - log_p
+
+    # Handle invalid samples (NaN or -inf log_p)
+    invalid_mask = ~torch.isfinite(kl_per_sample)
+    if invalid_mask.any():
+        num_invalid = invalid_mask.sum().item()
+        log.warning(
+            f"Found {num_invalid}/{num_samples} samples with invalid "
+            f"log probability"
+        )
+
+        if invalid_penalty is not None:
+            # Replace invalid values with penalty
+            kl_per_sample = torch.where(
+                invalid_mask,
+                torch.tensor(invalid_penalty, dtype=kl_per_sample.dtype),
+                kl_per_sample,
+            )
+
     # Estimate reverse KL: E_q[log q - log p]
-    reverse_kl_estimate = (log_q - log_p).mean()
+    reverse_kl_estimate = kl_per_sample.mean()
 
     return reverse_kl_estimate

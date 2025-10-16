@@ -52,7 +52,7 @@ def test_lc2st_with_two_moons():
 
 def test_lc2st_with_hierarchical_two_moons():
     """Test lc2st with hierarchical_two_moons task"""
-    task = get_task("hierarchical_two_moons", n_l=3)
+    task = get_task("hierarchical_two_moons", n_l=5)
 
     # Create a mock posterior with appropriate dimensionality
     true_params = task.get_true_parameters(num_observation=1)
