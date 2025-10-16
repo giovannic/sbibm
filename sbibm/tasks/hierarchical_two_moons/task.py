@@ -7,8 +7,7 @@ import torch
 from pyro import distributions as pdist
 from pyro.distributions import constraints
 from pyro.distributions.transforms import biject_to
-from pyro.infer.mcmc import NUTS
-from sbi.samplers.mcmc.mcmc import MCMC
+from pyro.infer.mcmc import MCMC, NUTS
 
 import sbibm
 from sbibm.tasks.distributions import (
@@ -392,7 +391,6 @@ class HierarchicalTwoMoons(Task):
             "num_chains": num_chains,
             "num_samples": thinning * num_samples,
             "warmup_steps": num_warmup,
-            "available_cpu": 1,
             "initial_params": initial_params,
         }
 

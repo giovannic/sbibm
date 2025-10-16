@@ -3,9 +3,8 @@ import warnings
 from typing import Any, Dict, Optional
 
 import torch
-from pyro.infer.mcmc import HMC, NUTS
-from sbi.samplers.mcmc.mcmc import MCMC
-from sbi.samplers.mcmc.slice import Slice
+from pyro.infer.mcmc import HMC, MCMC, NUTS
+from sbi.samplers.mcmc.slice_numpy import SliceSamplerSerial as Slice
 
 import sbibm
 from sbibm.algorithms.pyro.utils.tensorboard import (
@@ -132,8 +131,8 @@ def run(
         "num_chains": num_chains,
         "num_samples": thinning * num_samples,
         "warmup_steps": num_warmup,
-        "available_cpu": available_cpu,
         "initial_params": initial_params,
+        "mp_context": mp_context if available_cpu > 1 else None,
     }
     log.info(
         "Calling MCMC with: MCMC({name}_kernel, {parameters})".format(
