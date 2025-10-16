@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 from sbi import inference as inference
-from sbi.utils.get_nn_models import classifier_nn
+from sbi.neural_nets import classifier_nn
 
 from sbibm.algorithms.sbi.utils import (
     wrap_posterior,
