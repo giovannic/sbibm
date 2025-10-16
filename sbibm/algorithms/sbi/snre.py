@@ -140,22 +140,11 @@ def run(
             **training_kwargs,
         )
 
-        (
-            potential_fn,
-            theta_transform,
-        ) = inference.ratio_estimator_based_potential(
+        posterior = inference_method.build_posterior(
             ratio_estimator,
-            prior,
-            observation,
-            # NOTE: disable transform if sbibm does it. will return IdentityTransform.
-            enable_transform=not automatic_transforms_enabled,
-        )
-        posterior = inference.MCMCPosterior(
-            potential_fn=potential_fn,
-            proposal=prior,  # proposal for init_strategy
-            theta_transform=theta_transform,
-            method=mcmc_method,
-            **mcmc_parameters,
+            sample_with="mcmc",
+            mcmc_method=mcmc_method,
+            mcmc_parameters=mcmc_parameters,
         )
         # Change init_strategy to latest_sample after second round.
         if r > 1:
