@@ -46,6 +46,7 @@ def fig_posterior(
     limits: Optional[Union[List[float], str]] = None,
     num_bins: int = 40,
     scatter_size: float = 1.0,
+    labels_dim_override: Optional[List[str]] = None,
     **kwargs: Any,
 ):
     """Plots posteriors samples for given task
@@ -74,6 +75,9 @@ def fig_posterior(
             "Algorithm" / `samples_name`, in which case respective ranges are used
         num_bins: Number of bins
         scatter_size: Scatter size
+        labels_dim_override: Optional list of custom labels for parameter dimensions.
+            If provided, these labels will be used instead of auto-generated θ₁, θ₂, etc.
+            Useful for hierarchical tasks with custom parameter naming (e.g., "global_loc₀", "local₁_θ₁")
 
     Returns:
         Chart
@@ -150,8 +154,11 @@ def fig_posterior(
     for s in samples:
         assert s.shape[0] == num_samples
 
-    numbers_unicode = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉", "₁₀"]
-    labels_dim = [f"θ{numbers_unicode[i+1]}" for i in range(task.dim_parameters)]
+    if labels_dim_override is not None:
+        labels_dim = labels_dim_override
+    else:
+        numbers_unicode = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉", "₁₀"]
+        labels_dim = [f"θ{numbers_unicode[i+1]}" for i in range(task.dim_parameters)]
 
     df = den.np2df(
         samples=[sample for sample in samples],
