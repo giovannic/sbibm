@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pyro
 import torch
@@ -21,8 +21,21 @@ from sbibm.tasks.two_moons.task import TwoMoons
 from sbibm.utils.io import save_convergence_stats
 
 
+class _SummedStackTransform(torch.distributions.transforms.StackTransform):
+    """StackTransform that sums Jacobians across dimensions.
+
+    The base StackTransform returns per-dimension Jacobians, but some
+    code (like FlowWrapper) expects a scalar Jacobian per batch element.
+    """
+
+    def log_abs_det_jacobian(self, x, y):
+        """Compute log abs det Jacobian, summing across dimensions."""
+        jac_per_dim = super().log_abs_det_jacobian(x, y)
+        return jac_per_dim.sum(dim=-1)
+
+
 class HierarchicalTwoMoons(Task):
-    def __init__(self, n_l: int = 5):
+    def __init__(self, n_l: int = 5, invalid_log_prob=1e-10):
         """Hierarchical Two Moons
 
         Hierarchical extension of the Two Moons task where each observation
@@ -40,8 +53,10 @@ class HierarchicalTwoMoons(Task):
 
         Args:
             n_l: Number of local contexts (default: 5)
+            invalid_log_prob: Log probability for invalid parameters
         """
         self.n_l = n_l
+        self.invalid_log_prob = invalid_log_prob
 
         # Observation seeds
         observation_seeds = [
@@ -132,9 +147,8 @@ class HierarchicalTwoMoons(Task):
         for _ in range(2 * n_l):
             transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
 
-        self.composite_transform = torch.distributions.transforms.StackTransform(
-            transforms_list, dim=-1
-        )
+        # Use custom wrapper to ensure Jacobian is properly summed
+        self.composite_transform = _SummedStackTransform(transforms_list, dim=-1)
 
     def get_prior(self):
         """Get prior distribution.
@@ -214,6 +228,11 @@ class HierarchicalTwoMoons(Task):
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
 
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, **kwargs: Any
+    ):
+        return {"parameters": self.composite_transform}
+
     def _likelihood(
         self,
         parameters: torch.Tensor,
@@ -274,7 +293,7 @@ class HierarchicalTwoMoons(Task):
 
             # Handle invalid region (u < 0)
             if len(torch.where(u < 0.0)[0]) > 0:
-                log_lik_context[torch.where(u < 0.0)[0]] = -torch.tensor(math.inf)
+                log_lik_context[torch.where(u < 0.0)[0]] = self.invalid_log_prob
 
             log_likelihoods.append(log_lik_context)
 

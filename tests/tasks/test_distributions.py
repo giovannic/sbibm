@@ -201,6 +201,46 @@ def test_truncated_normal_edge_cases():
     assert torch.abs(samples.mean()) < 0.05
 
 
+def test_truncated_normal_bijection_respects_constraints():
+    """Test that biject_to respects TruncatedNormal support bounds.
+
+    When we apply biject_to(dist.support) and then its inverse, samples
+    should remain within the distribution's support bounds.
+    """
+    from pyro.distributions.transforms import biject_to
+
+    loc = torch.tensor(0.0)
+    scale = torch.tensor(1.0)
+    low = -1.0
+    high = 1.0
+    dist = TruncatedNormal(loc, scale, low=low, high=high)
+
+    # Get the bijection for this distribution's support
+    transform = biject_to(dist.support)
+
+    # Sample from the distribution (should be in [low, high])
+    samples_constrained = dist.sample(torch.Size([100]))
+
+    # Verify samples are within bounds
+    assert (samples_constrained >= low).all()
+    assert (samples_constrained <= high).all()
+
+    # Transform to unconstrained space
+    samples_unconstrained = transform(samples_constrained)
+
+    # Transform back to constrained space
+    samples_back = transform.inv(samples_unconstrained)
+
+    # Samples should still be within bounds after round-trip
+    assert (samples_back >= low).all(), \
+        f"Samples below bound: min={samples_back.min()}, low={low}"
+    assert (samples_back <= high).all(), \
+        f"Samples above bound: max={samples_back.max()}, high={high}"
+
+    # Should be close to original (within numerical precision)
+    assert torch.allclose(samples_constrained, samples_back, atol=1e-5)
+
+
 # ============================================================================
 # BlockwiseDistribution Tests
 # ============================================================================
