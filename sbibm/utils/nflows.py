@@ -324,7 +324,7 @@ class FlowWrapper:
 
     def sample(self, *args, **kwargs):
         Y = self.flow.sample(*args, **kwargs)
-        return self.transform.inv(Y)
+        return self.transform(Y)
 
     def log_prob(self, parameters_constrained):
         parameters_unconstrained = self.transform(parameters_constrained)
