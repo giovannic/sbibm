@@ -231,7 +231,7 @@ class HierarchicalTwoMoons(Task):
     def _get_transforms(
         self, automatic_transforms_enabled: bool = True, **kwargs: Any
     ):
-        return {"parameters": self.composite_transform}
+        return {"parameters": self.composite_transform.inv}
 
     def _likelihood(
         self,
