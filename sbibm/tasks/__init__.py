@@ -77,6 +77,13 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalGaussianMixture(*args, **kwargs)
 
+    elif task_name == "hierarchical_gaussian_linear":
+        from sbibm.tasks.hierarchical_gaussian_linear.task import (
+            HierarchicalGaussianLinear,
+        )
+
+        return HierarchicalGaussianLinear(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
