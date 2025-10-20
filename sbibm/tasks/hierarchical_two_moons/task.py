@@ -13,25 +13,13 @@ import sbibm
 from sbibm.tasks.distributions import (
     BlockwiseDistribution,
     HierarchicalDistribution,
+    SummedStackTransform,
     TruncatedNormal,
 )
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 from sbibm.tasks.two_moons.task import TwoMoons
 from sbibm.utils.io import save_convergence_stats
-
-
-class _SummedStackTransform(torch.distributions.transforms.StackTransform):
-    """StackTransform that sums Jacobians across dimensions.
-
-    The base StackTransform returns per-dimension Jacobians, but some
-    code (like FlowWrapper) expects a scalar Jacobian per batch element.
-    """
-
-    def log_abs_det_jacobian(self, x, y):
-        """Compute log abs det Jacobian, summing across dimensions."""
-        jac_per_dim = super().log_abs_det_jacobian(x, y)
-        return jac_per_dim.sum(dim=-1)
 
 
 class HierarchicalTwoMoons(Task):
@@ -148,7 +136,7 @@ class HierarchicalTwoMoons(Task):
             transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
 
         # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = _SummedStackTransform(transforms_list, dim=-1)
+        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
 
     def get_prior(self):
         """Get prior distribution.

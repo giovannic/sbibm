@@ -70,6 +70,13 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalTwoMoons(*args, **kwargs)
 
+    elif task_name == "hierarchical_gaussian_mixture":
+        from sbibm.tasks.hierarchical_gaussian_mixture.task import (
+            HierarchicalGaussianMixture,
+        )
+
+        return HierarchicalGaussianMixture(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 

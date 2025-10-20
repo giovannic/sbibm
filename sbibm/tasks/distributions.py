@@ -6,6 +6,20 @@ import torch
 from pyro.distributions.torch_distribution import TorchDistributionMixin
 
 
+class SummedStackTransform(torch.distributions.transforms.StackTransform):
+    """StackTransform that sums Jacobians across dimensions.
+
+    The base StackTransform returns per-dimension Jacobians, but some
+    code (like FlowWrapper) expects a scalar Jacobian per batch element.
+    This is useful for hierarchical tasks that need composite transforms.
+    """
+
+    def log_abs_det_jacobian(self, x, y):
+        """Compute log abs det Jacobian, summing across dimensions."""
+        jac_per_dim = super().log_abs_det_jacobian(x, y)
+        return jac_per_dim.sum(dim=-1)
+
+
 class TruncatedNormal(torch.distributions.Distribution, TorchDistributionMixin):
     """Truncated Normal distribution using CDF-based methods.
 
