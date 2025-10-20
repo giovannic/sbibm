@@ -77,6 +77,11 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalGaussianMixture(*args, **kwargs)
 
+    elif task_name == "hierarchical_slcp":
+        from sbibm.tasks.hierarchical_slcp.task import HierarchicalSLCP
+
+        return HierarchicalSLCP(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
