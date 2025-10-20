@@ -89,6 +89,20 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalSLCP(*args, **kwargs)
 
+    elif task_name == "hierarchical_bernoulli_glm":
+        from sbibm.tasks.hierarchical_bernoulli_glm.task import (
+            HierarchicalBernoulliGLM,
+        )
+
+        return HierarchicalBernoulliGLM(*args, **kwargs)
+
+    elif task_name == "hierarchical_bernoulli_glm_raw":
+        from sbibm.tasks.hierarchical_bernoulli_glm.task import (
+            HierarchicalBernoulliGLM,
+        )
+
+        return HierarchicalBernoulliGLM(*args, summary="raw", **kwargs)
+
     else:
         raise NotImplementedError()
 
