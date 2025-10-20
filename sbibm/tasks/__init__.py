@@ -103,6 +103,13 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalBernoulliGLM(*args, summary="raw", **kwargs)
 
+    elif task_name == "hierarchical_gaussian_linear_uniform":
+        from sbibm.tasks.hierarchical_gaussian_linear_uniform.task import (
+            HierarchicalGaussianLinearUniform,
+        )
+
+        return HierarchicalGaussianLinearUniform(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
