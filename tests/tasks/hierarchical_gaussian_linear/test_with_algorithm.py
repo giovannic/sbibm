@@ -18,13 +18,19 @@ log = logging.getLogger(__name__)
 
 
 @pytest.mark.slow
-def test_snpe_integration():
+@pytest.mark.parametrize("automatic_transforms_enabled", [True, False])
+def test_snpe_integration(automatic_transforms_enabled):
     """Test hierarchical_gaussian_linear with SNPE algorithm.
 
     This test verifies that SNPE can be trained on the hierarchical task
-    and produces valid posterior samples.
+    and produces valid posterior samples, with and without automatic
+    transforms.
+
+    Args:
+        automatic_transforms_enabled: Whether to use automatic transforms
     """
-    n_l = 3
+    # Use n_l=5 to match pre-generated observations
+    n_l = 5
     task = HierarchicalGaussianLinear(n_l=n_l)
     n_samples = 100
 
@@ -38,7 +44,7 @@ def test_snpe_integration():
         neural_net="maf",
         hidden_features=50,
         max_num_epochs=5,
-        automatic_transforms_enabled=False,
+        automatic_transforms_enabled=automatic_transforms_enabled,
     )
 
     # Verify samples shape

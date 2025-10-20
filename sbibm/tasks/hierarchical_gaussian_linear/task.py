@@ -1,11 +1,13 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pyro
 import torch
 from pyro import distributions as pdist
+from pyro.distributions import constraints
+from pyro.distributions.transforms import biject_to
 
-from sbibm.tasks.distributions import HierarchicalDistribution
+from sbibm.tasks.distributions import HierarchicalDistribution, SummedStackTransform
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 
@@ -97,6 +99,20 @@ class HierarchicalGaussianLinear(Task):
         self.prior_dist = HierarchicalDistribution(global_dist, local_dist_fn, dim_global=dim, dim_local=n_l)
         self.prior_dist.set_default_validate_args(False)
 
+        # Build composite transform (constrained <-> unconstrained)
+        transforms_list = []
+
+        # global_mean: Normal (unbounded) - use identity transform
+        for _ in range(dim):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
+
+        # local_scales: HalfNormal (R+) <-> R
+        for _ in range(n_l):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+
     def get_prior(self):
         """Get prior distribution.
 
@@ -125,14 +141,14 @@ class HierarchicalGaussianLinear(Task):
             # Split parameters into global and local
             # Global: [:, :dim] (mean structure)
             # Local: [:, dim:] (n_l noise scales)
-            global_mean = parameters[:, :self.dim]  # noqa: E203
-            local_scales = parameters[:, self.dim:]  # noqa: E203
+            global_mean = parameters[:, : self.dim]  # noqa: E203
+            local_scales = parameters[:, self.dim :]  # noqa: E203
 
             # For each local context, sample observations
             observations = []
             for i in range(self.n_l):
                 # Extract noise scale for context i
-                scale_i = local_scales[:, i:i + 1]  # noqa: E203
+                scale_i = local_scales[:, i : i + 1]  # noqa: E203
 
                 # Sample observations: Normal(global_mean, scale_i * I)
                 # Broadcast scale_i across all dimensions
@@ -155,6 +171,17 @@ class HierarchicalGaussianLinear(Task):
             Prior distribution
         """
         return self.prior_dist
+
+    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
+        """Get transforms for converting between constrained and unconstrained space.
+
+        Args:
+            automatic_transforms_enabled: Whether to return transforms
+
+        Returns:
+            Dictionary with 'parameters' key containing the transform
+        """
+        return {"parameters": self.composite_transform.inv}
 
     def _sample_reference_posterior(
         self,
