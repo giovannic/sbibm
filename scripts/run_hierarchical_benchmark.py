@@ -282,6 +282,7 @@ def main():
         seed=args.seed,
         num_samples=args.num_samples,
         num_rounds=args.num_rounds,
+        automatic_transforms_enabled=True,
     )
 
     # Save results
