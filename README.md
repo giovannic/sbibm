@@ -102,6 +102,48 @@ task.name_display           # name_display: SLCP
 
 Finally, if you want to have a look at the source code of the task, take a look in `sbibm/tasks/slcp/task.py`. If you wanted to implement a new task, we would recommend modelling them after the existing ones. You will see that each task has a private `_setup` method that was used to generate the reference posterior samples.
 
+### Hierarchical Tasks
+
+In addition to the standard tasks, `sbibm` includes hierarchical variants for multi-level inference benchmarking. Hierarchical tasks feature parameters naturally organized into global (shared) and local (group-specific) levels, enabling benchmarking of algorithms on multi-site studies, pooling problems, and hierarchical inference scenarios.
+
+All standard tasks have hierarchical variants available with the prefix `hierarchical_`:
+- `hierarchical_two_moons`, `hierarchical_gaussian_mixture`, `hierarchical_gaussian_linear`, `hierarchical_slcp`, `hierarchical_bernoulli_glm`, `hierarchical_gaussian_linear_uniform`, `hierarchical_sir`, `hierarchical_lotka_volterra`
+
+Hierarchical tasks are parameterized by `n_l` (number of local contexts). For example:
+
+```python
+import sbibm
+
+# Load hierarchical task with n_l=5 local contexts
+task = sbibm.get_task("hierarchical_two_moons", n_l=5)
+
+# Prior and simulator work the same way as standard tasks
+prior = task.get_prior()
+simulator = task.get_simulator()
+observation = task.get_observation(num_observation=1)
+
+# All SBI algorithms work seamlessly with hierarchical tasks
+from sbibm.algorithms import snpe
+posterior_samples, _, _ = snpe(
+    task=task,
+    num_samples=10_000,
+    num_simulations=100_000,
+    num_observation=1
+)
+```
+
+For evaluation, hierarchical tasks support reference-free metrics (no expensive MCMC-based reference posteriors required):
+
+```python
+from sbibm.metrics import reverse_kl, lc2st
+
+# Estimate reverse KL divergence without reference posterior
+reverse_kl_value = reverse_kl(posterior, task, num_observation=1)
+
+# Likelihood Calibration Two-Sample Test
+lc2st_result = lc2st(posterior, task, num_observation=1)
+```
+
 
 ## Algorithms
 
