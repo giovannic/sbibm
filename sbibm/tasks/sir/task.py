@@ -112,6 +112,45 @@ class SIR(Task):
 
         return torch.stack([dS, dI, dR])
 
+    def solve_ode_trajectories(
+        self, parameters: torch.Tensor
+    ) -> torch.Tensor:
+        """Solve SIR ODE for batched parameters (deterministic).
+
+        Args:
+            parameters: Shape (num_samples, 2) with [beta, gamma] for
+                each sample
+
+        Returns:
+            Trajectories shape (num_samples, 3, num_timepoints) with
+            [S, I, R] populations over time
+        """
+        num_samples = parameters.shape[0]
+        t = torch.linspace(
+            0, self.days, int(self.days / self.saveat) + 1
+        )
+
+        us = []
+        for num_sample in range(num_samples):
+            self._current_params = parameters[num_sample, :]
+
+            u_trajectory = odeint(
+                self._sir_ode, self.u0, t, method="dopri5"
+            )
+            u = u_trajectory.T
+
+            if u.shape != torch.Size(
+                [3, int(self.dim_data_raw / 3)]
+            ):
+                u = float("nan") * torch.ones(
+                    (3, int(self.dim_data_raw / 3))
+                )
+                u = u.double()
+
+            us.append(u.reshape(1, 3, -1))
+
+        return torch.cat(us).float()
+
     def get_labels_parameters(self) -> List[str]:
         """Get list containing parameter labels"""
         return [r"$\beta$", r"$\gamma$"]
@@ -140,28 +179,8 @@ class SIR(Task):
         def simulator(parameters):
             num_samples = parameters.shape[0]
 
-            # Generate time points for ODE integration
-            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
-
-            us = []
-            for num_sample in range(num_samples):
-                # Store current parameters for ODE function to access
-                self._current_params = parameters[num_sample, :]
-
-                # Solve ODE using torchdiffeq
-                # odeint returns shape (time_steps, state_dim)
-                u_trajectory = odeint(
-                    self._sir_ode, self.u0, t, method="dopri5"
-                )
-                # Transpose to (state_dim, time_steps) to match format
-                u = u_trajectory.T
-
-                if u.shape != torch.Size([3, int(self.dim_data_raw / 3)]):
-                    u = float("nan") * torch.ones((3, int(self.dim_data_raw / 3)))
-                    u = u.double()
-
-                us.append(u.reshape(1, 3, -1))
-            us = torch.cat(us).float()  # num_parameters x 3 x (days/saveat + 1)
+            # Solve ODE for all parameters
+            us = self.solve_ode_trajectories(parameters)
 
             idx_contains_nan = torch.where(
                 torch.isnan(us.reshape(num_samples, -1)).any(axis=1)

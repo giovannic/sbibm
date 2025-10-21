@@ -57,6 +57,7 @@ dev = [
     "isort>5.0.0",
     "ipdb",
     "pytest",
+    "pytest-benchmark",
     "pytest-plt",
     "typeguard",
 ]
@@ -82,5 +83,8 @@ extend-ignore = ["W503", "E203"]
 profile = "black"
 
 [tool.pytest.ini_options]
-addopts = "--ignore=src/"
+addopts = "--ignore=src/ -m 'not skip_by_default'"
 plt_filename_drop = ["^--"]
+markers = [
+    "skip_by_default: skip benchmark tests by default (use -m benchmark to run)",
+]
