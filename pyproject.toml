@@ -33,7 +33,7 @@ dependencies = [
     "autograd",
     "elfi>=0.7.6",
     "deneb",
-    "torchdiffeq",
+    "diffrax>=0.7.0",
     "future",
     "joblib",
     "numpy>=1.26.4",

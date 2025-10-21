@@ -2,10 +2,14 @@ import math
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import jax
+import jax.numpy as jnp
+import numpy
 import pyro
 import torch
-from torchdiffeq import odeint
 from pyro import distributions as pdist
+
+import diffrax
 
 import sbibm  # noqa -- needed for setting sysimage path
 from sbibm.tasks.simulator import Simulator
@@ -112,6 +116,30 @@ class SIR(Task):
 
         return torch.stack([dS, dI, dR])
 
+    def _sir_ode_func(
+        self, t: jnp.ndarray, u: jnp.ndarray, args
+    ) -> jnp.ndarray:
+        """Vectorized SIR ODE function for batch solving.
+
+        Args:
+            t: Time (scalar)
+            u: State vector shape (batch, 3) with [S, I, R]
+            args: Tuple of (beta, gamma) with shape (batch, 2)
+
+        Returns:
+            du/dt: State derivatives shape (batch, 3)
+        """
+        S = u[:, 0]
+        I = u[:, 1]
+        beta = args[:, 0]
+        gamma = args[:, 1]
+
+        dS = -beta * S * I / self.N
+        dI = beta * S * I / self.N - gamma * I
+        dR = gamma * I
+
+        return jnp.stack([dS, dI, dR], axis=1)
+
     def solve_ode_trajectories(
         self, parameters: torch.Tensor
     ) -> torch.Tensor:
@@ -126,30 +154,51 @@ class SIR(Task):
             [S, I, R] populations over time
         """
         num_samples = parameters.shape[0]
-        t = torch.linspace(
+        t_save = torch.linspace(
             0, self.days, int(self.days / self.saveat) + 1
         )
 
-        us = []
-        for num_sample in range(num_samples):
-            self._current_params = parameters[num_sample, :]
+        # Convert to JAX arrays
+        params_jax = jnp.array(parameters.numpy())
+        u0_batch = jnp.tile(
+            jnp.array(self.u0.numpy()), (num_samples, 1)
+        )
+        t_save_jax = jnp.array(t_save.numpy())
 
-            u_trajectory = odeint(
-                self._sir_ode, self.u0, t, method="dopri5"
-            )
-            u = u_trajectory.T
+        # Define ODE term
+        vector_field = diffrax.ODETerm(self._sir_ode_func)
 
-            if u.shape != torch.Size(
-                [3, int(self.dim_data_raw / 3)]
-            ):
-                u = float("nan") * torch.ones(
-                    (3, int(self.dim_data_raw / 3))
-                )
-                u = u.double()
+        # Solve ODE for all samples in batch
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.1,
+            y0=u0_batch,
+            args=params_jax,
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
 
-            us.append(u.reshape(1, 3, -1))
+        # Convert back to PyTorch
+        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories = torch.from_numpy(
+            trajectories_np
+        ).to(torch.float32)
 
-        return torch.cat(us).float()
+        # Permute from (num_timepoints, num_samples, 3) to
+        # (num_samples, 3, num_timepoints)
+        trajectories = trajectories.permute(1, 2, 0)
+
+        # Validate output shape
+        expected_shape = torch.Size(
+            [num_samples, 3, int(self.dim_data_raw / 3)]
+        )
+        if trajectories.shape != expected_shape:
+            trajectories = float("nan") * torch.ones(expected_shape)
+
+        return trajectories.float()
 
     def get_labels_parameters(self) -> List[str]:
         """Get list containing parameter labels"""
