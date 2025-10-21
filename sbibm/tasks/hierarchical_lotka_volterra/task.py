@@ -1,12 +1,17 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pyro
 import torch
 from pyro import distributions as pdist
+from pyro.distributions import constraints
+from pyro.distributions.transforms import biject_to
 from torchdiffeq import odeint
 
-from sbibm.tasks.distributions import HierarchicalDistribution
+from sbibm.tasks.distributions import (
+    HierarchicalDistribution,
+    SummedStackTransform,
+)
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 
@@ -129,6 +134,21 @@ class HierarchicalLotkaVolterra(Task):
         )
         self.prior_dist.set_default_validate_args(False)
 
+        # Build composite transform (constrained <-> unconstrained)
+        # All parameters are log-scale (positive real) -> R
+        transforms_list = []
+
+        # Global parameters: 2 (beta, gamma) - all LogNormal
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # Local parameters: 2*n_l - all LogNormal (alpha_i, delta_i per site)
+        for _ in range(2 * n_l):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+
         # Initial conditions for ODE
         self.u0 = torch.tensor([30.0, 1.0])
 
@@ -169,6 +189,19 @@ class HierarchicalLotkaVolterra(Task):
     def get_prior_dist(self):
         """Get prior distribution object for likelihood computation."""
         return self.prior_dist
+
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, **kwargs: Any
+    ):
+        """Get transforms for unconstrained <-> constrained space.
+
+        Args:
+            automatic_transforms_enabled: Whether to return transforms
+
+        Returns:
+            Dictionary with 'parameters' key containing the transform
+        """
+        return {"parameters": self.composite_transform.inv}
 
     def get_simulator(self, max_calls: Optional[int] = None) -> Simulator:
         """Get function returning samples from simulator given parameters
