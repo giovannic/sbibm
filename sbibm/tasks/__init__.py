@@ -115,6 +115,13 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalSIR(*args, **kwargs)
 
+    elif task_name == "hierarchical_lotka_volterra":
+        from sbibm.tasks.hierarchical_lotka_volterra.task import (
+            HierarchicalLotkaVolterra,
+        )
+
+        return HierarchicalLotkaVolterra(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
