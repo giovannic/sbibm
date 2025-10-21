@@ -111,3 +111,27 @@ def test_reference_posterior_raises():
 
     with pytest.raises(NotImplementedError):
         task._sample_reference_posterior(num_samples=100, num_observation=1)
+
+
+def test_likelihood():
+    """Test likelihood computation."""
+    n_l = 3
+    task = HierarchicalGaussianMixture(n_l=n_l)
+    prior = task.get_prior()
+    simulator = task.get_simulator()
+
+    # Generate some parameters and data
+    parameters = prior(num_samples=5)
+    data = simulator(parameters)
+
+    # Compute log-likelihood
+    log_lik = task._likelihood(parameters, data, log=True)
+    assert log_lik.shape == torch.Size([5])
+    assert not torch.isnan(log_lik).any()
+    assert torch.all(torch.isfinite(log_lik))
+
+    # Non-log likelihood
+    lik = task._likelihood(parameters, data, log=False)
+    assert lik.shape == torch.Size([5])
+    assert not torch.isnan(lik).any()
+    assert (lik >= 0).all()

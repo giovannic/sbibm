@@ -120,3 +120,27 @@ def test_get_prior_dist():
     # Test sampling from returned distribution
     samples = prior_dist.sample((10,))
     assert samples.shape == (10, 13)  # 10 global + 3 local
+
+
+def test_likelihood():
+    """Test likelihood computation."""
+    n_l = 3
+    task = HierarchicalGaussianLinear(n_l=n_l)
+    prior = task.get_prior()
+    simulator = task.get_simulator()
+
+    # Generate some parameters and data
+    parameters = prior(num_samples=5)
+    data = simulator(parameters)
+
+    # Compute log-likelihood
+    log_lik = task._likelihood(parameters, data, log=True)
+    assert log_lik.shape == torch.Size([5])
+    assert not torch.isnan(log_lik).any()
+    assert torch.all(torch.isfinite(log_lik))
+
+    # Non-log likelihood
+    lik = task._likelihood(parameters, data, log=False)
+    assert lik.shape == torch.Size([5])
+    assert not torch.isnan(lik).any()
+    assert (lik >= 0).all()

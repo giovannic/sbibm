@@ -224,6 +224,86 @@ class HierarchicalGaussianMixture(Task):
         """
         return {"parameters": self.composite_transform.inv}
 
+    def _likelihood(
+        self,
+        parameters: torch.Tensor,
+        data: torch.Tensor,
+        log: bool = True,
+    ) -> torch.Tensor:
+        """Compute likelihood of data given parameters.
+
+        For hierarchical gaussian mixture, we compute a marginalized
+        likelihood over the mixture components. The likelihood for each
+        context is a mixture of Gaussians.
+
+        Args:
+            parameters: Parameter tensor (batch_size, dim_parameters)
+            data: Observation tensor (batch_size, dim_data)
+            log: If True, return log-likelihood
+
+        Returns:
+            (Log-)likelihood values
+        """
+        if parameters.ndim == 1:
+            parameters = parameters.reshape(1, -1)
+
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+
+        assert parameters.shape[1] == self.dim_parameters
+        assert data.shape[1] == self.dim_data
+
+        batch_size = parameters.shape[0]
+
+        # Split parameters: local params [:, 2*dim:]
+        local_params = parameters[:, 2 * self.dim :].reshape(
+            batch_size, self.n_l, self.dim
+        )
+
+        # Split data into n_l contexts (each dim observations)
+        data_split = data.reshape(batch_size, self.n_l, self.dim)
+
+        # Compute likelihood for each context (mixture of Gaussians)
+        log_likelihoods = []
+        for i in range(self.n_l):
+            # Extract local parameters and data for context i
+            context_params = local_params[:, i, :]  # (batch_size, dim)
+            context_data = data_split[:, i, :]  # (batch_size, dim)
+
+            # Compute log-likelihood for each mixture component
+            mixture_weights = self.simulator_params["mixture_weights"]
+            num_components = len(mixture_weights)
+
+            component_log_probs = []
+            for k in range(num_components):
+                loc = (
+                    self.simulator_params["mixture_locs_factor"][k]
+                    * context_params
+                )
+                scale = self.simulator_params["mixture_scales"][k]
+
+                # Compute Normal log-likelihood
+                dist = pdist.Normal(loc, scale)
+                log_prob_k = dist.log_prob(context_data).sum(dim=1)
+
+                # Add log of mixture weight
+                log_prob_k = log_prob_k + torch.log(mixture_weights[k])
+
+                component_log_probs.append(log_prob_k)
+
+            # Log-sum-exp over mixture components
+            component_log_probs = torch.stack(component_log_probs, dim=0)
+            log_lik_context = torch.logsumexp(component_log_probs, dim=0)
+
+            log_likelihoods.append(log_lik_context)
+
+        # Sum log-likelihoods across contexts (product of likelihoods)
+        total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
+
+        return total_log_likelihood if log else torch.exp(
+            total_log_likelihood
+        )
+
     def _sample_reference_posterior(
         self,
         num_samples: int,

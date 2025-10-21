@@ -203,6 +203,67 @@ class HierarchicalGaussianLinearUniform(Task):
         """
         return {"parameters": self.composite_transform.inv}
 
+    def _likelihood(
+        self,
+        parameters: torch.Tensor,
+        data: torch.Tensor,
+        log: bool = True,
+    ) -> torch.Tensor:
+        """Compute likelihood of data given parameters.
+
+        For hierarchical gaussian linear uniform, the likelihood is the
+        product of independent Gaussian likelihoods for each local
+        context.
+
+        Args:
+            parameters: Parameter tensor (batch_size, dim_parameters)
+            data: Observation tensor (batch_size, dim_data)
+            log: If True, return log-likelihood
+
+        Returns:
+            (Log-)likelihood values
+        """
+        if parameters.ndim == 1:
+            parameters = parameters.reshape(1, -1)
+
+        if data.ndim == 1:
+            data = data.reshape(1, -1)
+
+        assert parameters.shape[1] == self.dim_parameters
+        assert data.shape[1] == self.dim_data
+
+        batch_size = parameters.shape[0]
+
+        # Split parameters: global mean [:, :dim], local scales [:, dim:]
+        global_mean = parameters[:, : self.dim]  # noqa: E203
+        local_scales = parameters[:, self.dim :]  # noqa: E203
+
+        # Split data into n_l contexts (each dim observations)
+        data_split = data.reshape(batch_size, self.n_l, self.dim)
+
+        # Compute likelihood for each context
+        log_likelihoods = []
+        for i in range(self.n_l):
+            # Extract data for context i
+            context_data = data_split[:, i, :]  # (batch_size, dim)
+            scale_i = local_scales[:, i : i + 1]  # noqa: E203
+
+            # Compute Gaussian log-likelihood:
+            # N(x | global_mean, scale_i^2 * I)
+            dist = pdist.Normal(
+                loc=global_mean, scale=scale_i.expand(-1, self.dim)
+            )
+            log_lik_context = dist.log_prob(context_data).sum(dim=1)
+
+            log_likelihoods.append(log_lik_context)
+
+        # Sum log-likelihoods across contexts (product of likelihoods)
+        total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
+
+        return total_log_likelihood if log else torch.exp(
+            total_log_likelihood
+        )
+
     def _sample_reference_posterior(
         self,
         num_samples: int,
