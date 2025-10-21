@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import diffrax
+import jax
+import jax.numpy as jnp
+import numpy
 import pyro
 import torch
-from torchdiffeq import odeint
 from pyro import distributions as pdist
 
 import sbibm  # noqa -- needed for setting sysimage path
@@ -89,30 +92,81 @@ class LotkaVolterra(Task):
         # NOTE: For subsample statistic
         self.total_count = 1000  # TODO: Value?
 
-    def _lotka_volterra_ode(
-        self, t: torch.Tensor, u: torch.Tensor
-    ) -> torch.Tensor:
-        """Lotka-Volterra ODE right-hand side function
+    def _lotka_volterra_ode_func(
+        self, t: jnp.ndarray, u: jnp.ndarray, args
+    ) -> jnp.ndarray:
+        """Vectorized Lotka-Volterra ODE function for batch solving.
 
         Args:
             t: Time (scalar)
-            u: State vector [prey, predator]
+            u: State vector shape (batch, 2) with [prey, predator]
+            args: Tuple of (alpha, beta, gamma, delta) with
+                shape (batch, 4)
 
         Returns:
-            du/dt: State derivatives [dx, dy]
+            du/dt: State derivatives shape (batch, 2)
         """
-        x, y = u[0], u[1]
-        alpha, beta, gamma, delta = (
-            self._current_params[0],
-            self._current_params[1],
-            self._current_params[2],
-            self._current_params[3],
-        )
+        x = u[:, 0]
+        y = u[:, 1]
+        alpha = args[:, 0]
+        beta = args[:, 1]
+        gamma = args[:, 2]
+        delta = args[:, 3]
 
         dx = alpha * x - beta * x * y
         dy = -gamma * y + delta * x * y
 
-        return torch.stack([dx, dy])
+        return jnp.stack([dx, dy], axis=1)
+
+    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
+        """Solve Lotka-Volterra ODE for batched parameters.
+
+        Args:
+            parameters: Shape (num_samples, 4) with
+                [alpha, beta, gamma, delta] for each sample
+
+        Returns:
+            Trajectories shape (num_samples, 2, num_timepoints)
+            with [prey, predator] populations over time
+        """
+        num_samples = parameters.shape[0]
+        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+
+        # Convert to JAX arrays
+        params_jax = jnp.array(parameters.numpy())
+        u0_batch = jnp.tile(jnp.array(self.u0.numpy()), (num_samples, 1))
+        t_save_jax = jnp.array(t_save.numpy())
+
+        # Define ODE term
+        vector_field = diffrax.ODETerm(self._lotka_volterra_ode_func)
+
+        # Solve ODE for all samples in batch
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.01,
+            y0=u0_batch,
+            args=params_jax,
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
+
+        # Convert back to PyTorch
+        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
+
+        # Permute from (num_timepoints, num_samples, 2) to
+        # (num_samples, 2, num_timepoints)
+        trajectories = trajectories.permute(1, 2, 0)
+
+        # Validate output shape
+        expected_shape = torch.Size([num_samples, 2, int(self.dim_data_raw / 2)])
+        if trajectories.shape != expected_shape:
+            trajectories = float("nan") * torch.ones(expected_shape)
+
+        return trajectories.float()
 
     def get_labels_parameters(self) -> List[str]:
         """Get list containing parameter labels"""
@@ -131,9 +185,9 @@ class LotkaVolterra(Task):
         """Get function returning samples from simulator given parameters
 
         Args:
-            max_calls: Maximum number of function calls. Additional calls will
-                result in SimulationBudgetExceeded exceptions. Defaults to None
-                for infinite budget
+            max_calls: Maximum number of function calls. Additional calls
+                will result in SimulationBudgetExceeded exceptions.
+                Defaults to None for infinite budget
 
         Return:
             Simulator callable
@@ -142,28 +196,8 @@ class LotkaVolterra(Task):
         def simulator(parameters):
             num_samples = parameters.shape[0]
 
-            # Generate time points for ODE integration
-            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
-
-            us = []
-            for num_sample in range(num_samples):
-                # Store current parameters for ODE function to access
-                self._current_params = parameters[num_sample, :]
-
-                # Solve ODE using torchdiffeq
-                # odeint returns shape (time_steps, state_dim)
-                u_trajectory = odeint(
-                    self._lotka_volterra_ode, self.u0, t, method="dopri5"
-                )
-                # Transpose to (state_dim, time_steps) to match format
-                u = u_trajectory.T
-
-                if u.shape != torch.Size([2, int(self.dim_data_raw / 2)]):
-                    u = float("nan") * torch.ones((2, int(self.dim_data_raw / 2)))
-                    u = u.double()
-
-                us.append(u.reshape(1, 2, -1))
-            us = torch.cat(us).float()  # num_parameters x 2 x (days/saveat + 1)
+            # Solve ODE for all parameters
+            us = self.solve_ode_trajectories(parameters)
 
             idx_contains_nan = torch.where(
                 torch.isnan(us.reshape(num_samples, -1)).any(axis=1)

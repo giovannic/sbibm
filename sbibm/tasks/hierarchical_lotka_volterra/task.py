@@ -1,12 +1,14 @@
 from pathlib import Path
 from typing import Any, Optional
 
+import diffrax
+import jax.numpy as jnp
+import numpy
 import pyro
 import torch
 from pyro import distributions as pdist
 from pyro.distributions import constraints
 from pyro.distributions.transforms import biject_to
-from torchdiffeq import odeint
 
 from sbibm.tasks.distributions import (
     HierarchicalDistribution,
@@ -155,28 +157,125 @@ class HierarchicalLotkaVolterra(Task):
         # Initial conditions for ODE
         self.u0 = torch.tensor([30.0, 1.0])
 
-    def _lotka_volterra_ode(self, t: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
-        """Lotka-Volterra ODE right-hand side function
+    def _lotka_volterra_ode_func(
+        self, t: jnp.ndarray, u: jnp.ndarray, args
+    ) -> jnp.ndarray:
+        """Vectorized Lotka-Volterra ODE function for batch solving.
+
+        For hierarchical LV, we batch across all (sample, site) pairs.
+        Parameters are [alpha, beta, gamma, delta] per batch element.
 
         Args:
             t: Time (scalar)
-            u: State vector [prey, predator]
+            u: State vector shape (batch, 2) with [prey, predator]
+            args: Parameters shape (batch, 4) with
+                [alpha, beta, gamma, delta]
 
         Returns:
-            du/dt: State derivatives [dx, dy]
+            du/dt: State derivatives shape (batch, 2)
         """
-        x, y = u[0], u[1]
-        alpha, beta, gamma, delta = (
-            self._current_params[0],
-            self._current_params[1],
-            self._current_params[2],
-            self._current_params[3],
-        )
+        x = u[:, 0]
+        y = u[:, 1]
+        alpha = args[:, 0]
+        beta = args[:, 1]
+        gamma = args[:, 2]
+        delta = args[:, 3]
 
         dx = alpha * x - beta * x * y
         dy = -gamma * y + delta * x * y
 
-        return torch.stack([dx, dy])
+        return jnp.stack([dx, dy], axis=1)
+
+    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
+        """Solve hierarchical LV ODE for batched parameters.
+
+        Parameters are structured as:
+        - [:, 0:2]: global params [beta, gamma]
+        - [:, 2:]: local params [alpha_1, delta_1, ..., alpha_n_l,
+          delta_n_l]
+
+        We expand this to (num_samples * n_l, 4) with
+        [alpha_i, beta, gamma, delta_i] for each batch element.
+
+        Args:
+            parameters: Shape (num_samples, 2 + 2*n_l) with
+                [beta, gamma, alpha_1, delta_1, ..., alpha_n_l,
+                delta_n_l]
+
+        Returns:
+            Trajectories shape (num_samples, n_l, 2, num_timepoints)
+        """
+        num_samples = parameters.shape[0]
+        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+
+        # Extract global and local parameters
+        global_params = parameters[:, :2]  # (num_samples, 2)
+        local_params = parameters[:, 2:]  # (num_samples, 2*n_l)
+
+        # Reshape local params to (num_samples, n_l, 2)
+        # where each site has [alpha_i, delta_i]
+        local_reshaped = local_params.reshape(num_samples, self.n_l, 2)
+
+        # Create flattened batch: (num_samples * n_l, 4)
+        # For each (sample, site) pair, we need [alpha, beta,
+        # gamma, delta]
+        alpha_flat = local_reshaped[:, :, 0].reshape(-1)
+        delta_flat = local_reshaped[:, :, 1].reshape(-1)
+        beta_expanded = global_params[:, 0].repeat_interleave(self.n_l)
+        gamma_expanded = global_params[:, 1].repeat_interleave(self.n_l)
+
+        # Stack into args format: (num_samples * n_l, 4)
+        params_jax = jnp.stack(
+            [
+                alpha_flat.numpy(),
+                beta_expanded.numpy(),
+                gamma_expanded.numpy(),
+                delta_flat.numpy(),
+            ],
+            axis=1,
+        )
+
+        # Initial conditions for all batch elements
+        u0_batch = jnp.tile(
+            jnp.array(self.u0.numpy()),
+            (num_samples * self.n_l, 1),
+        )
+        t_save_jax = jnp.array(t_save.numpy())
+
+        # Define ODE term
+        vector_field = diffrax.ODETerm(self._lotka_volterra_ode_func)
+
+        # Solve ODE for all (sample, site) pairs in batch
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.01,
+            y0=u0_batch,
+            args=params_jax,
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
+
+        # Convert back to PyTorch
+        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
+
+        # Permute from (num_timepoints, num_samples*n_l, 2) to
+        # (num_samples*n_l, 2, num_timepoints)
+        trajectories = trajectories.permute(1, 2, 0)
+
+        # Reshape to (num_samples, n_l, 2, num_timepoints)
+        expected_shape = torch.Size(
+            [num_samples * self.n_l, 2, int(self.days / self.saveat) + 1]
+        )
+        if trajectories.shape != expected_shape:
+            trajectories = float("nan") * torch.ones(expected_shape)
+
+        trajectories = trajectories.reshape(num_samples, self.n_l, 2, -1)
+
+        return trajectories.float()
 
     def get_prior(self):
         """Get prior distribution.
@@ -217,80 +316,52 @@ class HierarchicalLotkaVolterra(Task):
         """
 
         def simulator(parameters: torch.Tensor) -> torch.Tensor:
-            """Simulates Lotka-Volterra for given hierarchical parameters
+            """Simulates Lotka-Volterra for hierarchical parameters.
 
             Parameters structure:
                 - Global: [beta, gamma] (first 2 dims)
-                - Local: [alpha_1, delta_1, alpha_2, delta_2, ...] (next 2*n_l)
+                - Local: [alpha_1, delta_1, alpha_2, delta_2, ...]
+                  (next 2*n_l)
 
-            Returns Poisson-distributed observations with rate proportional
-            to ODE trajectory.
+            Returns LogNormal-distributed observations.
             """
             num_samples = parameters.shape[0]
 
-            # Generate time points for ODE integration
-            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
-
-            # Split parameters into global and local
-            global_params = parameters[:, :2]  # (num_samples, 2): [beta, gamma]
-            local_params = parameters[:, 2:]  # (num_samples, 2*n_l)
+            # Solve ODE for all parameters and sites
+            # Returns (num_samples, n_l, 2, num_timepoints)
+            all_observations = self.solve_ode_trajectories(parameters)
 
             data = []
             for b in range(num_samples):
                 context_data = []
 
-                # For each local context (site), run ODE simulation
+                # For each local context (site)
                 for i in range(self.n_l):
-                    # Extract local parameters for this site
-                    alpha_i = local_params[b, 2 * i]
-                    delta_i = local_params[b, 2 * i + 1]
-                    beta = global_params[b, 0]
-                    gamma = global_params[b, 1]
+                    # Get trajectory for this site
+                    u = all_observations[b, i, :, :]  # (2, timepoints)
 
-                    # Combine into full parameter vector [alpha, beta, gamma, delta]
-                    self._current_params = torch.tensor([alpha_i, beta, gamma, delta_i])
-
-                    # Solve ODE using torchdiffeq
-                    try:
-                        u_trajectory = odeint(
-                            self._lotka_volterra_ode, self.u0, t, method="dopri5"
-                        )
-                        # Transpose to (state_dim, time_steps) to match format
-                        u = u_trajectory.T  # (2, time_steps)
-
-                        # Check for valid trajectory
-                        if u.shape != torch.Size([2, int(self.days / self.saveat) + 1]):
-                            # Invalid shape, return NaN
-                            context_data.append(float("nan") * torch.ones(10))
-                            continue
-
-                        if torch.isnan(u).any():
-                            # NaN in trajectory
-                            context_data.append(float("nan") * torch.ones(10))
-                            continue
-
-                        # Subsample every 21st time point (0, 21, 42, 63, 84)
-                        # This gives 5 time points
-                        u_sub = u[:, ::21]  # (2, 5)
-
-                        # Flatten to (10,)
-                        u_flat = u_sub.flatten()
-
-                        # Clamp to ensure valid log values
-                        u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
-
-                        # Sample from LogNormal distribution
-                        lognormal_dist = pdist.LogNormal(
-                            loc=torch.log(u_flat_clamped),
-                            scale=0.1,
-                        )
-                        obs = lognormal_dist.sample()
-
-                        context_data.append(obs)
-
-                    except Exception:
-                        # ODE solver failed, return NaN
+                    # Check for NaN
+                    if torch.isnan(u).any():
                         context_data.append(float("nan") * torch.ones(10))
+                        continue
+
+                    # Subsample every 21st time point
+                    u_sub = u[:, ::21]  # (2, 5)
+
+                    # Flatten to (10,)
+                    u_flat = u_sub.flatten()
+
+                    # Clamp to ensure valid log values
+                    u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
+
+                    # Sample from LogNormal distribution
+                    lognormal_dist = pdist.LogNormal(
+                        loc=torch.log(u_flat_clamped),
+                        scale=0.1,
+                    )
+                    obs = lognormal_dist.sample()
+
+                    context_data.append(obs)
 
                 # Concatenate all contexts
                 data.append(torch.cat(context_data))
@@ -302,27 +373,26 @@ class HierarchicalLotkaVolterra(Task):
     def _likelihood(
         self, parameters: torch.Tensor, data: torch.Tensor, log: bool = True
     ) -> torch.Tensor:
-        """Compute likelihood of data given parameters
+        """Compute likelihood of data given parameters.
 
         Uses LogNormal likelihood for observations. The likelihood is
-        naturally bounded since LogNormal log-likelihood is always finite.
+        naturally bounded since LogNormal log-likelihood is always
+        finite.
 
         Args:
-            parameters: Parameter tensor with shape (num_samples, dim_parameters)
+            parameters: Parameter tensor with shape
+                (num_samples, dim_parameters)
             data: Observation tensor with shape (num_samples, dim_data)
-            log: If True, return log-likelihood; otherwise return likelihood
+            log: If True, return log-likelihood; otherwise return
+                likelihood
 
         Returns:
             (Log-)likelihood values with shape (num_samples,)
         """
         num_samples = parameters.shape[0]
 
-        # Generate time points for ODE integration
-        t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
-
-        # Split parameters into global and local
-        global_params = parameters[:, :2]  # (num_samples, 2): [beta, gamma]
-        local_params = parameters[:, 2:]  # (num_samples, 2*n_l)
+        # Solve ODE for all parameters and sites
+        all_observations = self.solve_ode_trajectories(parameters)
 
         log_likelihoods = []
 
@@ -331,54 +401,32 @@ class HierarchicalLotkaVolterra(Task):
 
             # For each local context (site)
             for i in range(self.n_l):
-                # Extract local parameters for this site
-                alpha_i = local_params[b, 2 * i]
-                delta_i = local_params[b, 2 * i + 1]
-                beta = global_params[b, 0]
-                gamma = global_params[b, 1]
+                # Get trajectory for this site
+                u = all_observations[b, i, :, :]  # (2, timepoints)
 
-                # Combine into full parameter vector [alpha, beta, gamma, delta]
-                self._current_params = torch.tensor([alpha_i, beta, gamma, delta_i])
-
-                # Solve ODE
-                try:
-                    u_trajectory = odeint(
-                        self._lotka_volterra_ode, self.u0, t, method="dopri5"
-                    )
-                    u = u_trajectory.T  # (2, time_steps)
-
-                    # Check for valid trajectory
-                    if u.shape != torch.Size([2, int(self.days / self.saveat) + 1]):
-                        log_lik_sample = float("-inf")
-                        break
-
-                    if torch.isnan(u).any():
-                        log_lik_sample = float("-inf")
-                        break
-
-                    # Subsample every 21st time point
-                    u_sub = u[:, ::21]  # (2, 5)
-                    u_flat = u_sub.flatten()  # (10,)
-
-                    # Clamp to ensure valid log values
-                    u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
-
-                    # Get observed data for this context
-                    obs = data[b, i * 10: (i + 1) * 10]
-
-                    # Compute LogNormal log-likelihood
-                    lognormal_dist = torch.distributions.LogNormal(
-                        loc=torch.log(u_flat_clamped),
-                        scale=0.1,
-                    )
-                    log_lik_context = lognormal_dist.log_prob(obs).sum()
-
-                    log_lik_sample += log_lik_context
-
-                except Exception:
-                    # ODE solver failed
+                # Check for NaN
+                if torch.isnan(u).any():
                     log_lik_sample = float("-inf")
                     break
+
+                # Subsample every 21st time point
+                u_sub = u[:, ::21]  # (2, 5)
+                u_flat = u_sub.flatten()  # (10,)
+
+                # Clamp to ensure valid log values
+                u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
+
+                # Get observed data for this context
+                obs = data[b, i * 10 : (i + 1) * 10]
+
+                # Compute LogNormal log-likelihood
+                lognormal_dist = torch.distributions.LogNormal(
+                    loc=torch.log(u_flat_clamped),
+                    scale=0.1,
+                )
+                log_lik_context = lognormal_dist.log_prob(obs).sum()
+
+                log_lik_sample += log_lik_context
 
             log_likelihoods.append(log_lik_sample)
 

@@ -2,12 +2,14 @@ import math
 from pathlib import Path
 from typing import Any, Optional
 
+import diffrax
+import jax.numpy as jnp
+import numpy
 import pyro
 import torch
 from pyro import distributions as pdist
 from pyro.distributions import constraints
 from pyro.distributions.transforms import biject_to
-from torchdiffeq import odeint
 
 from sbibm.tasks.distributions import (
     HierarchicalDistribution,
@@ -142,27 +144,100 @@ class HierarchicalSIR(Task):
         # Initial conditions per region
         self.u0 = torch.tensor([N - I0 - R0, I0, R0])
 
-    def _sir_ode(
-        self, t: torch.Tensor, u: torch.Tensor, beta: float, gamma: float
-    ) -> torch.Tensor:
-        """SIR ODE right-hand side function
+    def _sir_ode_func(self, t: jnp.ndarray, u: jnp.ndarray, args) -> jnp.ndarray:
+        """Vectorized SIR ODE function for batch solving.
+
+        For hierarchical SIR, we batch across all (sample, region) pairs.
 
         Args:
             t: Time (scalar)
-            u: State vector [S, I, R]
-            beta: Transmission rate
-            gamma: Recovery rate
+            u: State vector shape (batch, 3) with [S, I, R]
+            args: Tuple of (beta, gamma) with shape (batch, 2)
 
         Returns:
-            du/dt: State derivatives [dS, dI, dR]
+            du/dt: State derivatives shape (batch, 3)
         """
-        S, I, R = u[0], u[1], u[2]
+        S = u[:, 0]
+        I = u[:, 1]
+        beta = args[:, 0]
+        gamma = args[:, 1]
 
         dS = -beta * S * I / self.N
         dI = beta * S * I / self.N - gamma * I
         dR = gamma * I
 
-        return torch.stack([dS, dI, dR])
+        return jnp.stack([dS, dI, dR], axis=1)
+
+    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
+        """Solve hierarchical SIR ODE for batched parameters.
+
+        For each sample, we have global beta and n_l local gammas.
+        We flatten to (num_samples * n_l,) batch dimension for
+        Diffrax vectorization.
+
+        Args:
+            parameters: Shape (num_samples, 1 + n_l) with
+                [beta, gamma_1, ..., gamma_n_l]
+
+        Returns:
+            Trajectories shape (num_samples, n_l, 3, num_timepoints)
+        """
+        num_samples = parameters.shape[0]
+        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+
+        # Extract beta and gamma for each sample
+        beta = parameters[:, 0]  # (num_samples,)
+        gamma = parameters[:, 1:]  # (num_samples, n_l)
+
+        # Create flattened batch: (num_samples * n_l,)
+        # Repeat beta for each region
+        beta_expanded = beta.repeat_interleave(self.n_l)  # (num_samples * n_l,)
+        gamma_flat = gamma.reshape(-1)  # (num_samples * n_l,)
+
+        # Stack into args format: (num_samples * n_l, 2)
+        params_jax = jnp.stack([beta_expanded.numpy(), gamma_flat.numpy()], axis=1)
+
+        # Initial conditions for all batch elements
+        u0_batch = jnp.tile(
+            jnp.array(self.u0.numpy()),
+            (num_samples * self.n_l, 1),
+        )
+        t_save_jax = jnp.array(t_save.numpy())
+
+        # Define ODE term
+        vector_field = diffrax.ODETerm(self._sir_ode_func)
+
+        # Solve ODE for all (sample, region) pairs in batch
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.1,
+            y0=u0_batch,
+            args=params_jax,
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
+
+        # Convert back to PyTorch
+        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
+
+        # Permute from (num_timepoints, num_samples*n_l, 3) to
+        # (num_samples*n_l, 3, num_timepoints)
+        trajectories = trajectories.permute(1, 2, 0)
+
+        # Reshape to (num_samples, n_l, 3, num_timepoints)
+        expected_shape = torch.Size(
+            [num_samples * self.n_l, 3, int(self.dim_data_raw / 3)]
+        )
+        if trajectories.shape != expected_shape:
+            trajectories = float("nan") * torch.ones(expected_shape)
+
+        trajectories = trajectories.reshape(num_samples, self.n_l, 3, -1)
+
+        return trajectories.float()
 
     def get_labels_parameters(self):
         """Get list containing parameter labels"""
@@ -198,57 +273,9 @@ class HierarchicalSIR(Task):
         def simulator(parameters):
             num_samples = parameters.shape[0]
 
-            # Split parameters into global and local
-            # Global: [:, 0] (beta)
-            # Local: [:, 1:] (n_l gamma values)
-            beta = parameters[:, 0]
-            gamma = parameters[:, 1:]
-
-            # Generate time points for ODE integration
-            t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
-
-            # Solve ODE for each sample and each region
-            all_observations = []
-
-            for num_sample in range(num_samples):
-                beta_sample = beta[num_sample].item()
-                gamma_sample = gamma[num_sample, :]
-
-                region_observations = []
-
-                for region_idx in range(self.n_l):
-                    gamma_region = gamma_sample[region_idx].item()
-
-                    # Solve ODE for this region
-                    try:
-                        u_trajectory = odeint(
-                            lambda t_val, u_val: self._sir_ode(
-                                t_val, u_val, beta_sample, gamma_region
-                            ),
-                            self.u0,
-                            t,
-                            method="dopri5",
-                        )
-                        # Transpose to (state_dim, time_steps)
-                        u = u_trajectory.T
-
-                        if u.shape != torch.Size([3, int(self.dim_data_raw / 3)]):
-                            u = float("nan") * torch.ones(
-                                (3, int(self.dim_data_raw / 3))
-                            )
-                            u = u.double()
-                    except Exception:
-                        u = float("nan") * torch.ones((3, int(self.dim_data_raw / 3)))
-                        u = u.double()
-
-                    region_observations.append(u)
-
-                # Stack all regions: shape (n_l, 3, time_steps)
-                region_observations = torch.stack(region_observations).float()
-                all_observations.append(region_observations)
-
-            # Stack all samples: shape (num_samples, n_l, 3, time_steps)
-            all_observations = torch.stack(all_observations)
+            # Solve ODE for all parameters and regions
+            # Vectorizes over both samples and local sites
+            all_observations = self.solve_ode_trajectories(parameters)
 
             # Check for NaN values
             idx_contains_nan = torch.where(
@@ -301,9 +328,9 @@ class HierarchicalSIR(Task):
     ) -> torch.Tensor:
         """Compute likelihood of data given parameters.
 
-        Likelihood model: For each region and time point, observed counts
-        follow Binomial(total_count, p=I(t)/N) where I(t) is the infected
-        population from the ODE solution.
+        Likelihood model: For each region and time point, observed
+        counts follow Binomial(total_count, p=I(t)/N) where I(t) is
+        the infected population from the ODE solution.
 
         Args:
             parameters: Parameter tensor (batch_size, dim_parameters)
@@ -315,44 +342,25 @@ class HierarchicalSIR(Task):
         """
         num_samples = parameters.shape[0]
 
-        # Split parameters into global and local
-        beta = parameters[:, 0]
-        gamma = parameters[:, 1:]
-
-        # Generate time points for ODE integration
-        t = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+        # Solve ODE for all parameters and regions
+        all_observations = self.solve_ode_trajectories(parameters)
 
         log_likelihoods = []
 
         for num_sample in range(num_samples):
-            beta_sample = beta[num_sample].item()
-            gamma_sample = gamma[num_sample, :]
             data_sample = data[num_sample, :]
-
             sample_log_likelihood = 0.0
 
-            for region_idx in range(self.n_l):
-                gamma_region = gamma_sample[region_idx].item()
+            # Check if this sample has NaN
+            if torch.isnan(all_observations[num_sample].reshape(-1)).any():
+                sample_log_likelihood = float("-inf")
+            else:
+                for region_idx in range(self.n_l):
+                    # Get I population for this region
+                    I_trajectory = all_observations[num_sample, region_idx, 1, :]
 
-                # Solve ODE for this region
-                try:
-                    u_trajectory = odeint(
-                        lambda t_val, u_val: self._sir_ode(
-                            t_val, u_val, beta_sample, gamma_region
-                        ),
-                        self.u0,
-                        t,
-                        method="dopri5",
-                    )
-                    u = u_trajectory.T
-
-                    if u.shape != torch.Size([3, int(self.dim_data_raw / 3)]):
-                        # ODE failed
-                        sample_log_likelihood = float("-inf")
-                        break
-
-                    # Subsample infected population (I) every 17 time steps
-                    I_subsampled = u[1, ::17]  # Shape: (10,)
+                    # Subsample every 17 time steps
+                    I_subsampled = I_trajectory[::17]
 
                     # Get data for this region
                     data_region = data_sample[region_idx * 10 : (region_idx + 1) * 10]
@@ -360,17 +368,13 @@ class HierarchicalSIR(Task):
                     # Compute Binomial log-likelihood
                     probs = (I_subsampled / self.N).clamp(0.0, 1.0)
                     binomial_dist = pdist.Binomial(
-                        total_count=self.total_count, probs=probs
+                        total_count=self.total_count,
+                        probs=probs,
                     )
 
                     # Sum log-likelihood across time points
                     region_log_lik = binomial_dist.log_prob(data_region).sum()
                     sample_log_likelihood += region_log_lik
-
-                except Exception:
-                    # ODE failed
-                    sample_log_likelihood = float("-inf")
-                    break
 
             log_likelihoods.append(sample_log_likelihood)
 
