@@ -41,7 +41,9 @@ for TASK in "${TASKS[@]}"; do
     --num_samples 100
 
   echo "Generating visualization for task: $TASK"
-  python scripts/visualalize_hierarchical_posterior.py --task "$TASK"
+  python scripts/visualize_hierarchical_posterior.py \
+    --task "$TASK" \
+    --output_path "test_results/${TASK}_posterior.png"
 done
 
 echo "All tasks completed!" 
