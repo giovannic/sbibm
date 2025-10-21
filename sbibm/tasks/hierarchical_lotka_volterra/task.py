@@ -18,8 +18,11 @@ from sbibm.tasks.task import Task
 
 class HierarchicalLotkaVolterra(Task):
     def __init__(
-        self, n_l: int = 5, days: float = 20.0, saveat: float = 0.2,
-        total_count: int = 100
+        self,
+        n_l: int = 5,
+        days: float = 20.0,
+        saveat: float = 0.2,
+        total_count: int = 100,
     ):
         """Hierarchical Lotka-Volterra model
 
@@ -41,8 +44,8 @@ class HierarchicalLotkaVolterra(Task):
         This represents multi-site ecological studies where predation dynamics
         are consistent but birth rates vary by local environmental conditions.
 
-        Observations are Poisson-distributed counts with rate = trajectory /
-        total_count, ensuring bounded likelihood for numerical stability.
+        Observations are LogNormal-distributed with the trajectory as the
+        mean in log-space, ensuring bounded likelihood for numerical stability.
 
         Args:
             n_l: Number of local contexts/sites (default: 5)
@@ -190,9 +193,7 @@ class HierarchicalLotkaVolterra(Task):
         """Get prior distribution object for likelihood computation."""
         return self.prior_dist
 
-    def _get_transforms(
-        self, automatic_transforms_enabled: bool = True, **kwargs: Any
-    ):
+    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
         """Get transforms for unconstrained <-> constrained space.
 
         Args:
@@ -247,9 +248,7 @@ class HierarchicalLotkaVolterra(Task):
                     gamma = global_params[b, 1]
 
                     # Combine into full parameter vector [alpha, beta, gamma, delta]
-                    self._current_params = torch.tensor(
-                        [alpha_i, beta, gamma, delta_i]
-                    )
+                    self._current_params = torch.tensor([alpha_i, beta, gamma, delta_i])
 
                     # Solve ODE using torchdiffeq
                     try:
@@ -262,40 +261,36 @@ class HierarchicalLotkaVolterra(Task):
                         # Check for valid trajectory
                         if u.shape != torch.Size([2, int(self.days / self.saveat) + 1]):
                             # Invalid shape, return NaN
-                            context_data.append(
-                                float("nan") * torch.ones(10)
-                            )
+                            context_data.append(float("nan") * torch.ones(10))
                             continue
 
                         if torch.isnan(u).any():
                             # NaN in trajectory
-                            context_data.append(
-                                float("nan") * torch.ones(10)
-                            )
+                            context_data.append(float("nan") * torch.ones(10))
                             continue
 
                         # Subsample every 21st time point (0, 21, 42, 63, 84)
                         # This gives 5 time points
                         u_sub = u[:, ::21]  # (2, 5)
 
-                        # Flatten to (10,) - [prey_t0, prey_t1, ..., predator_t0, ...]
+                        # Flatten to (10,)
                         u_flat = u_sub.flatten()
 
-                        # Scale by total_count to get Poisson rates
-                        rates = u_flat / self.total_count
-                        rates = rates.clamp(min=1e-10)  # Ensure positive rates
+                        # Clamp to ensure valid log values
+                        u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
 
-                        # Sample from Poisson distribution (no pyro)
-                        poisson_dist = torch.distributions.Poisson(rates)
-                        obs = poisson_dist.sample()
+                        # Sample from LogNormal distribution
+                        lognormal_dist = pdist.LogNormal(
+                            loc=torch.log(u_flat_clamped),
+                            scale=0.1,
+                        )
+                        obs = lognormal_dist.sample()
 
                         context_data.append(obs)
 
                     except Exception:
                         # ODE solver failed, return NaN
-                        context_data.append(
-                            float("nan") * torch.ones(10)
-                        )
+                        context_data.append(float("nan") * torch.ones(10))
 
                 # Concatenate all contexts
                 data.append(torch.cat(context_data))
@@ -309,8 +304,8 @@ class HierarchicalLotkaVolterra(Task):
     ) -> torch.Tensor:
         """Compute likelihood of data given parameters
 
-        Uses Poisson likelihood for count observations. The likelihood is
-        naturally bounded since Poisson log-likelihood is always finite.
+        Uses LogNormal likelihood for observations. The likelihood is
+        naturally bounded since LogNormal log-likelihood is always finite.
 
         Args:
             parameters: Parameter tensor with shape (num_samples, dim_parameters)
@@ -343,9 +338,7 @@ class HierarchicalLotkaVolterra(Task):
                 gamma = global_params[b, 1]
 
                 # Combine into full parameter vector [alpha, beta, gamma, delta]
-                self._current_params = torch.tensor(
-                    [alpha_i, beta, gamma, delta_i]
-                )
+                self._current_params = torch.tensor([alpha_i, beta, gamma, delta_i])
 
                 # Solve ODE
                 try:
@@ -367,16 +360,18 @@ class HierarchicalLotkaVolterra(Task):
                     u_sub = u[:, ::21]  # (2, 5)
                     u_flat = u_sub.flatten()  # (10,)
 
-                    # Scale by total_count to get Poisson rates
-                    rates = u_flat / self.total_count
-                    rates = rates.clamp(min=1e-10)
+                    # Clamp to ensure valid log values
+                    u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
 
                     # Get observed data for this context
-                    obs = data[b, i * 10 : (i + 1) * 10]
+                    obs = data[b, i * 10: (i + 1) * 10]
 
-                    # Compute Poisson log-likelihood
-                    poisson_dist = torch.distributions.Poisson(rates)
-                    log_lik_context = poisson_dist.log_prob(obs).sum()
+                    # Compute LogNormal log-likelihood
+                    lognormal_dist = torch.distributions.LogNormal(
+                        loc=torch.log(u_flat_clamped),
+                        scale=0.1,
+                    )
+                    log_lik_context = lognormal_dist.log_prob(obs).sum()
 
                     log_lik_sample += log_lik_context
 

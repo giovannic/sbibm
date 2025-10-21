@@ -80,14 +80,18 @@ def test_prior_structure():
     assert global_params.shape == (1000, 2)
 
     # Beta should be centered around 0.028 (in log space)
-    assert torch.abs(torch.log(global_params[:, 0]).mean() - torch.log(
-        torch.tensor(0.028)
-    )) < 0.2
+    assert (
+        torch.abs(
+            torch.log(global_params[:, 0]).mean() - torch.log(torch.tensor(0.028))
+        )
+        < 0.2
+    )
 
     # Gamma should be centered around 0.5 (in log space)
-    assert torch.abs(torch.log(global_params[:, 1]).mean() - torch.log(
-        torch.tensor(0.5)
-    )) < 0.2
+    assert (
+        torch.abs(torch.log(global_params[:, 1]).mean() - torch.log(torch.tensor(0.5)))
+        < 0.2
+    )
 
     # All global params should be positive (LogNormal)
     assert (global_params > 0).all()
@@ -120,7 +124,7 @@ def test_prior_dist_log_prob():
 
 
 def test_likelihood_computation():
-    """Test likelihood computation with Poisson observations."""
+    """Test likelihood computation with LogNormal observations."""
     n_l = 3
     task = HierarchicalLotkaVolterra(n_l=n_l)
     prior = task.get_prior()
@@ -134,7 +138,7 @@ def test_likelihood_computation():
     log_lik = task._likelihood(parameters, observations, log=True)
 
     assert log_lik.shape == (5,)
-    # Likelihood should be finite (Poisson is naturally bounded)
+    # Likelihood should be finite (LogNormal is naturally bounded)
     # or -inf for failed ODE solves
     assert not torch.isnan(log_lik).any()
 
