@@ -110,6 +110,11 @@ def get_task(task_name: str, *args: Any, **kwargs: Any) -> Task:
 
         return HierarchicalGaussianLinearUniform(*args, **kwargs)
 
+    elif task_name == "hierarchical_sir":
+        from sbibm.tasks.hierarchical_sir.task import HierarchicalSIR
+
+        return HierarchicalSIR(*args, **kwargs)
+
     else:
         raise NotImplementedError()
 
