@@ -1,16 +1,16 @@
 #!/usr/bin/env python
 """
-Aggregation and plotting script for hierarchical benchmark results.
+Grid visualization script for hierarchical benchmark results.
 
 This script aggregates CSV results from parallel HPC jobs and creates
-publication-quality visualizations of benchmark metrics.
+publication-quality grid visualizations with tasks as rows and
+algorithms (methods) as columns.
 
 Example usage:
     python scripts/plot_hierarchical_benchmark.py \
         --input_dir results \
-        --task hierarchical_two_moons \
         --metric reverse_kl \
-        --output_path results/reverse_kl.png \
+        --output_path results/reverse_kl_grid.png \
         --config manuscript
 """
 import argparse
@@ -31,20 +31,19 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
-def load_results(input_dir: Path, task_name: str) -> pd.DataFrame:
-    """Load and concatenate all benchmark results for a task.
+def load_all_results(input_dir: Path) -> dict:
+    """Load benchmark results for all hierarchical tasks.
 
     Args:
         input_dir: Directory containing benchmark CSV files
-        task_name: Task name to filter results
 
     Returns:
-        Concatenated DataFrame with all results
+        Dict mapping task_name -> DataFrame with all results
     """
     log = logging.getLogger(__name__)
 
-    # Find all CSV files matching the task pattern
-    pattern = f"{task_name}_*.csv"
+    # Find all hierarchical_*.csv files
+    pattern = "hierarchical_*.csv"
     csv_files = list(input_dir.glob(pattern))
 
     if not csv_files:
@@ -53,101 +52,176 @@ def load_results(input_dir: Path, task_name: str) -> pd.DataFrame:
             f"in {input_dir}"
         )
 
-    log.info(f"Found {len(csv_files)} result files for task '{task_name}'")
+    log.info(f"Found {len(csv_files)} result files total")
 
-    # Load and concatenate all CSVs
-    dfs = []
+    # Load all CSVs and group by task name from data
+    results = {}
     for csv_file in csv_files:
         log.debug(f"Loading {csv_file.name}")
         df = pd.read_csv(csv_file)
-        dfs.append(df)
 
-    combined_df = pd.concat(dfs, ignore_index=True)
-    log.info(f"Loaded {len(combined_df)} total benchmark runs")
+        # Extract task name from 'task' column (first row)
+        if len(df) > 0 and "task" in df.columns:
+            task_name = df["task"].iloc[0]
 
-    return combined_df
+            if task_name not in results:
+                results[task_name] = []
+            results[task_name].append(df)
+
+    # Concatenate all DataFrames per task
+    for task_name in sorted(results.keys()):
+        results[task_name] = pd.concat(
+            results[task_name], ignore_index=True
+        )
+        log.info(
+            f"Loaded {len(results[task_name])} total runs for "
+            f"'{task_name}'"
+        )
+
+    return results
 
 
-def create_metric_plot(
-    df: pd.DataFrame,
+def create_grid_plot(
+    results: dict,
     metric: str,
     title: str = None,
     config: str = "manuscript",
 ) -> plt.Figure:
-    """Create a line plot for the specified metric.
+    """Create a grid of line plots for all tasks and algorithms.
 
     Args:
-        df: DataFrame with columns: algorithm, num_simulations, metric
+        results: Dict mapping task_name -> DataFrame with
+                 columns: algorithm, num_simulations, metric
         metric: Name of the metric column to plot
-        title: Optional title for the plot
+        title: Optional title for the entire figure
         config: Styling configuration ('manuscript' or 'streamlit')
 
     Returns:
         matplotlib Figure object
     """
-    # Set style
+    # Set style based on config
     if config == "manuscript":
-        plt.rcParams["font.size"] = 10
-        figsize = (8, 4)
+        plt.rcParams["font.size"] = 9
+        cell_width = 3.5
+        cell_height = 2.5
     else:  # streamlit
-        plt.rcParams["font.size"] = 14
-        figsize = (10, 6)
+        plt.rcParams["font.size"] = 11
+        cell_width = 4.5
+        cell_height = 3.0
 
     plt.style.use("seaborn-v0_8-whitegrid")
 
-    # Get unique algorithms
-    algorithms = sorted(df["algorithm"].unique())
+    # Extract unique tasks and algorithms
+    tasks = sorted(results.keys())
+    all_algorithms = set()
+    for df in results.values():
+        all_algorithms.update(df["algorithm"].unique())
+    algorithms = sorted(all_algorithms)
+
+    n_tasks = len(tasks)
     n_algorithms = len(algorithms)
 
-    # Create subplots (one per algorithm)
-    fig, axes = plt.subplots(
-        1, n_algorithms, figsize=(figsize[0] * n_algorithms / 2, figsize[1]),
-        squeeze=False
+    # Create figure and subplots
+    figsize = (
+        cell_width * n_algorithms,
+        cell_height * n_tasks,
     )
-    axes = axes.flatten()
+    fig, axes = plt.subplots(
+        n_tasks,
+        n_algorithms,
+        figsize=figsize,
+        squeeze=False,
+    )
 
-    # Plot each algorithm
-    for idx, algorithm in enumerate(algorithms):
-        ax = axes[idx]
-        algo_df = df[df["algorithm"] == algorithm]
+    # Plot each task x algorithm cell
+    for task_idx, task_name in enumerate(tasks):
+        df = results[task_name]
 
-        # Group by num_simulations and compute mean/CI
-        grouped = (
-            algo_df.groupby("num_simulations")[metric]
-            .agg(["mean", "std", "count"])
-            .reset_index()
-        )
+        for algo_idx, algorithm in enumerate(algorithms):
+            ax = axes[task_idx, algo_idx]
 
-        # Compute 95% CI
-        grouped["ci"] = 1.96 * grouped["std"] / (grouped["count"] ** 0.5)
+            # Filter data for this task and algorithm
+            algo_df = df[df["algorithm"] == algorithm]
 
-        # Plot line with error bars
-        ax.errorbar(
-            grouped["num_simulations"],
-            grouped["mean"],
-            yerr=grouped["ci"],
-            marker="o",
-            markersize=6,
-            linewidth=2,
-            capsize=4,
-            label=algorithm,
-        )
+            if len(algo_df) == 0:
+                # Algorithm not present for this task
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No data",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                    fontsize=10,
+                    color="gray",
+                )
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.set_xticks([])
+                ax.set_yticks([])
+            else:
+                # Group by num_simulations and compute stats
+                grouped = (
+                    algo_df.groupby("num_simulations")[metric]
+                    .agg(["mean", "std", "count"])
+                    .reset_index()
+                )
 
-        # Formatting
-        ax.set_xlabel("Number of Simulations")
-        ax.set_ylabel(metric.replace("_", " ").title())
-        ax.set_title(algorithm.upper())
-        ax.grid(True, alpha=0.3)
+                # Compute 95% CI
+                grouped["ci"] = (
+                    1.96 * grouped["std"] / (grouped["count"] ** 0.5)
+                )
 
-        # Set x-axis to use actual values (not continuous)
-        ax.set_xticks(sorted(df["num_simulations"].unique()))
-        ax.tick_params(axis="x", rotation=45)
+                # Plot line with error bars
+                ax.errorbar(
+                    grouped["num_simulations"],
+                    grouped["mean"],
+                    yerr=grouped["ci"],
+                    marker="o",
+                    markersize=5,
+                    linewidth=2,
+                    capsize=3,
+                    label=algorithm,
+                )
+
+                # Formatting
+                ax.set_xlabel("Number of Simulations", fontsize=9)
+                if algo_idx == 0:
+                    ax.set_ylabel(
+                        metric.replace("_", " ").title(),
+                        fontsize=9,
+                    )
+                ax.grid(True, alpha=0.3)
+
+                # Set x-axis ticks to actual simulation values
+                x_ticks = sorted(df["num_simulations"].unique())
+                ax.set_xticks(x_ticks)
+                ax.tick_params(axis="x", rotation=45, labelsize=8)
+                ax.tick_params(axis="y", labelsize=8)
+
+            # Title: algorithm name on top row
+            if task_idx == 0:
+                ax.set_title(algorithm.upper(), fontsize=10, fontweight="bold")
+
+            # Task label on left column
+            if algo_idx == 0:
+                ax.text(
+                    -0.45,
+                    0.5,
+                    task_name.replace("_", " ").title(),
+                    transform=ax.transAxes,
+                    fontsize=9,
+                    fontweight="bold",
+                    ha="right",
+                    va="center",
+                    rotation=90,
+                )
 
     # Add overall title if provided
     if title:
-        fig.suptitle(title, fontsize=14, y=1.02)
+        fig.suptitle(title, fontsize=12, y=0.995, fontweight="bold")
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0.05, 0, 1, 0.99])
 
     return fig
 
@@ -164,12 +238,6 @@ def main():
         type=str,
         default="results",
         help="Directory containing benchmark CSV files",
-    )
-    parser.add_argument(
-        "--task",
-        type=str,
-        default="hierarchical_two_moons",
-        help="Task name to filter results",
     )
     parser.add_argument(
         "--metric",
@@ -215,10 +283,9 @@ def main():
     log = logging.getLogger(__name__)
 
     log.info("=" * 80)
-    log.info("Hierarchical Benchmark Plotter")
+    log.info("Hierarchical Benchmark Grid Plotter")
     log.info("=" * 80)
     log.info(f"Input directory: {args.input_dir}")
-    log.info(f"Task: {args.task}")
     log.info(f"Metric: {args.metric}")
     log.info(f"Output path: {args.output_path}")
     log.info(f"Config: {args.config}")
@@ -231,27 +298,25 @@ def main():
             f"Output path must end with .png, got: {output_path.suffix}"
         )
 
-    # Load results
-    df = load_results(
-        input_dir=Path(args.input_dir), task_name=args.task
-    )
+    # Load all results
+    results = load_all_results(input_dir=Path(args.input_dir))
 
     # Print summary statistics
     log.info("\nSummary Statistics:")
-    log.info(f"  Algorithms: {df['algorithm'].unique().tolist()}")
-    log.info(
-        f"  Simulation budgets: "
-        f"{sorted(df['num_simulations'].unique().tolist())}"
-    )
-    log.info(
-        f"  Observations: {sorted(df['num_observation'].unique().tolist())}"
-    )
-    log.info(f"  Total runs: {len(df)}")
+    log.info(f"  Tasks: {list(results.keys())}")
+    for task_name, df in results.items():
+        log.info(f"  {task_name}:")
+        log.info(f"    Algorithms: {df['algorithm'].unique().tolist()}")
+        log.info(
+            f"    Simulation budgets: "
+            f"{sorted(df['num_simulations'].unique().tolist())}"
+        )
+        log.info(f"    Total runs: {len(df)}")
 
-    # Create plot
-    log.info(f"Creating plot for metric: {args.metric}")
-    fig = create_metric_plot(
-        df=df,
+    # Create grid plot
+    log.info(f"Creating grid plot for metric: {args.metric}")
+    fig = create_grid_plot(
+        results=results,
         metric=args.metric,
         title=args.title,
         config=args.config,
@@ -266,7 +331,7 @@ def main():
     plt.close(fig)
 
     log.info("=" * 80)
-    log.info("Plotting completed successfully!")
+    log.info("Grid plotting completed successfully!")
     log.info("=" * 80)
 
 
