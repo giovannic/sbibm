@@ -8,14 +8,15 @@ Extracted from hierarchical-inference repository.
 from functools import partial
 
 import torch
-from torch import nn, tanh, relu
-
 from nflows import distributions as distributions_
 from nflows import flows, transforms
 from nflows.nn import nets
+from torch import nn, relu, tanh
 
 
-def build_maf(dim=1, num_transforms=8, context_features=None, hidden_features=128):
+def build_maf(
+    dim=1, num_transforms=8, context_features=None, hidden_features=128
+):
     transform = transforms.CompositeTransform(
         [
             transforms.CompositeTransform(
@@ -61,7 +62,14 @@ def mask_in_layer(i, features):
     return create_alternating_binary_mask(features=features, even=(i % 2 == 0))
 
 
-def build_nsf(dim=1, num_transforms=8, context_features=None, hidden_features=128, tail_bound=3.0, num_bins=10):
+def build_nsf(
+    dim=1,
+    num_transforms=8,
+    context_features=None,
+    hidden_features=128,
+    tail_bound=3.0,
+    num_bins=10,
+):
     conditioner = partial(
         nets.ResidualNet,
         hidden_features=hidden_features,

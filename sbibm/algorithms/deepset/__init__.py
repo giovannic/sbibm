@@ -5,10 +5,13 @@ Provides hierarchical inference through permutation-invariant set encoding.
 Source: https://github.com/smsharma/hierarchical-inference
 """
 
-from .hierarchical_deepset import HierarchicalDeepSet, HierarchicalDeepSetInference
 from .flows import build_maf, build_nsf
-from .utils import build_mlp
+from .hierarchical_deepset import (
+    HierarchicalDeepSet,
+    HierarchicalDeepSetInference,
+)
 from .resnet import ResNetEstimator
+from .utils import build_mlp
 
 __all__ = [
     "HierarchicalDeepSet",

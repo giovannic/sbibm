@@ -5,13 +5,13 @@ Source: https://github.com/smsharma/hierarchical-inference/blob/main/notebooks/0
 Extracted from lensing notebook in hierarchical-inference repository.
 """
 
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
 from einops import rearrange, repeat
 
-from .resnet import ResNetEstimator
 from .flows import build_maf
+from .resnet import ResNetEstimator
 from .utils import build_mlp
 
 
@@ -21,7 +21,9 @@ class HierarchicalDeepSet(nn.Module):
     local and global parameter posterior density estimators.
     """
 
-    def __init__(self, dim_hidden=128, condition_local_on_global=True, n_set_max=None):
+    def __init__(
+        self, dim_hidden=128, condition_local_on_global=True, n_set_max=None
+    ):
         super(HierarchicalDeepSet, self).__init__()
 
         if n_set_max is None:
@@ -69,13 +71,19 @@ class HierarchicalDeepSet(nn.Module):
             < torch.Tensor(lens)[:, None]
         ).to(x.device)
 
-        x = rearrange(x, "batch n_set h w -> (batch n_set)  h w", n_set=self.n_set_max)
+        x = rearrange(
+            x, "batch n_set h w -> (batch n_set)  h w", n_set=self.n_set_max
+        )
         x = self.enc(x)
 
-        x = rearrange(x, "(batch n_set) n_out -> batch n_set n_out", n_set=self.n_set_max)
+        x = rearrange(
+            x, "(batch n_set) n_out -> batch n_set n_out", n_set=self.n_set_max
+        )
 
         idx_setperm = torch.randperm(self.n_set_max)  # Permutation indices
-        x = x[:, idx_setperm, :] * mask[:, :, None]  # Permute set elements and mask
+        x = (
+            x[:, idx_setperm, :] * mask[:, :, None]
+        )  # Permute set elements and mask
         y_local = y_local[:, idx_setperm, :]
 
         x, x_cond_local = torch.chunk(x, 2, -1)
@@ -95,7 +103,9 @@ class HierarchicalDeepSet(nn.Module):
 
         if self.condition_local_on_global:
             y_global_repeat = repeat(
-                y_global, "batch glob -> (batch n_set) glob", n_set=self.n_set_max
+                y_global,
+                "batch glob -> (batch n_set) glob",
+                n_set=self.n_set_max,
             )
             x_cond_local = torch.cat([x_cond_local, y_global_repeat], -1)
 
@@ -106,7 +116,11 @@ class HierarchicalDeepSet(nn.Module):
         )
 
         log_prob_local = self.flow_local.log_prob(y_local, x_cond_local)
-        log_prob_local = rearrange(log_prob_local, "(batch n_set) -> batch n_set", n_set=self.n_set_max)
+        log_prob_local = rearrange(
+            log_prob_local,
+            "(batch n_set) -> batch n_set",
+            n_set=self.n_set_max,
+        )
         log_prob_local = (log_prob_local * mask).sum(-1)
 
         log_prob_global = self.flow_global.log_prob(y_global, x_cond_global)
@@ -145,10 +159,13 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         self.global_loss = global_loss
 
         # Condition local flow on global params only if both are turned on
-        condition_local_on_global = True if (local_loss and global_loss) else False
+        condition_local_on_global = (
+            True if (local_loss and global_loss) else False
+        )
 
         self.deep_set = HierarchicalDeepSet(
-            condition_local_on_global=condition_local_on_global, n_set_max=n_set_max
+            condition_local_on_global=condition_local_on_global,
+            n_set_max=n_set_max,
         )
 
     def forward(self, x, y_local, y_global):
@@ -163,7 +180,9 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": self.scheduler(optimizer, **self.scheduler_kwargs),
+                "scheduler": self.scheduler(
+                    optimizer, **self.scheduler_kwargs
+                ),
                 "interval": "epoch",
                 "monitor": "val_loss",
                 "frequency": 1,

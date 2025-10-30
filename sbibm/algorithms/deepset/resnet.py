@@ -5,38 +5,54 @@ Source: https://github.com/smsharma/hierarchical-inference/blob/main/models/resn
 Extracted from hierarchical-inference repository.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
+from __future__ import (
+    absolute_import,
+    division,
+    print_function,
+    unicode_literals,
+)
 
-import torch
-from torch.autograd import grad
 import logging
 
+import torch
 from einops import rearrange
+from torch.autograd import grad
 
 logger = logging.getLogger(__name__)
 
 
-import torch.nn as nn
-
 import sys
+
+import torch.nn as nn
 
 sys.path.append("../")
 
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False)
+    return nn.Conv2d(
+        in_planes,
+        out_planes,
+        kernel_size=3,
+        stride=stride,
+        padding=1,
+        bias=False,
+    )
 
 
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+    return nn.Conv2d(
+        in_planes, out_planes, kernel_size=1, stride=stride, bias=False
+    )
 
 
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None):
+    def __init__(
+        self, inplanes, planes, stride=1, downsample=None, norm_layer=None
+    ):
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -71,7 +87,9 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, norm_layer=None):
+    def __init__(
+        self, inplanes, planes, stride=1, downsample=None, norm_layer=None
+    ):
         super(Bottleneck, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -110,7 +128,19 @@ class Bottleneck(nn.Module):
 
 
 class ResNetEstimator(nn.Module):
-    def __init__(self, n_aux=0, cfg=18, n_hidden=512, n_out=128, input_mean=None, input_std=None, log_input=False, zero_init_residual=False, norm_layer=None, zero_bias=False):
+    def __init__(
+        self,
+        n_aux=0,
+        cfg=18,
+        n_hidden=512,
+        n_out=128,
+        input_mean=None,
+        input_std=None,
+        log_input=False,
+        zero_init_residual=False,
+        norm_layer=None,
+        zero_bias=False,
+    ):
         super(ResNetEstimator, self).__init__()
 
         self.input_mean = input_mean
@@ -122,21 +152,33 @@ class ResNetEstimator(nn.Module):
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1 = nn.Conv2d(
+            1, 64, kernel_size=7, stride=2, padding=3, bias=False
+        )
         self.bn1 = norm_layer(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0], norm_layer=norm_layer)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, norm_layer=norm_layer)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, norm_layer=norm_layer)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, norm_layer=norm_layer)
+        self.layer1 = self._make_layer(
+            block, 64, layers[0], norm_layer=norm_layer
+        )
+        self.layer2 = self._make_layer(
+            block, 128, layers[1], stride=2, norm_layer=norm_layer
+        )
+        self.layer3 = self._make_layer(
+            block, 256, layers[2], stride=2, norm_layer=norm_layer
+        )
+        self.layer4 = self._make_layer(
+            block, 512, layers[3], stride=2, norm_layer=norm_layer
+        )
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc1 = nn.Linear(n_hidden * block.expansion + n_aux, 2048)
         self.fc2 = nn.Linear(2048, n_out)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                nn.init.kaiming_normal_(
+                    m.weight, mode="fan_out", nonlinearity="relu"
+                )
                 if zero_bias:
                     try:
                         nn.init.constant_(m.bias, 0)
@@ -208,7 +250,11 @@ class ResNetEstimator(nn.Module):
             block = Bottleneck
             layers = [3, 8, 36, 3]
         else:
-            raise ValueError("Unknown ResNet configuration {}, use 18, 34, 50, 101, or 152!".format(cfg))
+            raise ValueError(
+                "Unknown ResNet configuration {}, use 18, 34, 50, 101, or 152!".format(
+                    cfg
+                )
+            )
 
         return block, layers
 
@@ -217,10 +263,15 @@ class ResNetEstimator(nn.Module):
             norm_layer = nn.BatchNorm2d
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(conv1x1(self.inplanes, planes * block.expansion, stride), norm_layer(planes * block.expansion))
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion),
+            )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, norm_layer))
+        layers.append(
+            block(self.inplanes, planes, stride, downsample, norm_layer)
+        )
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes, norm_layer=norm_layer))
