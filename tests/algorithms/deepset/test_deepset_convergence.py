@@ -36,6 +36,9 @@ def test_hierarchical_deepset_convergence_joint(
 
     # Create model
     model = HierarchicalDeepSetInference(
+        n_in=3,
+        dim_global=1,
+        dim_local=1,
         n_set_max=5,
         local_loss=True,
         global_loss=True,
@@ -90,6 +93,9 @@ def test_hierarchical_deepset_parameter_recovery_global(
 
     # Create and train model
     model = HierarchicalDeepSetInference(
+        n_in=3,
+        dim_global=1,
+        dim_local=1,
         n_set_max=5,
         local_loss=True,
         global_loss=True,
@@ -113,18 +119,9 @@ def test_hierarchical_deepset_parameter_recovery_global(
     # Evaluate on test set - extract global parameters
     model.eval()
     with torch.no_grad():
-        # x_test shape: (100, 5, 3)
-        # Model expects (batch, n_set, h, w) - pad to image format
-        x_test_images = torch.zeros(
-            x_test.shape[0], x_test.shape[1], 64, 64
-        )
-        # Copy observations into first few positions
-        for i in range(x_test.shape[2]):
-            x_test_images[:, :, i, 0] = x_test[:, :, i]
-
-        # Forward pass (skip last few samples to avoid masking edge cases)
+        # x_test shape: (100, 5, 3) - already 3D, pass directly
         log_prob_local, log_prob_global = model.deep_set(
-            x_test_images, torch.randn_like(y_global_test), y_global_test
+            x_test, y_global_test, y_global_test
         )
 
     # Verify outputs are reasonable
@@ -169,6 +166,9 @@ def test_hierarchical_deepset_parameter_recovery_local(
 
     # Create and train model
     model = HierarchicalDeepSetInference(
+        n_in=3,
+        dim_global=1,
+        dim_local=1,
         n_set_max=5,
         local_loss=True,
         global_loss=True,
@@ -192,19 +192,9 @@ def test_hierarchical_deepset_parameter_recovery_local(
     # Evaluate on test set - extract local parameters
     model.eval()
     with torch.no_grad():
-        # x_test shape: (100, 5, 3)
-        # Model expects (batch, n_set, h, w) - pad to image format
-        x_test_images = torch.zeros(
-            x_test.shape[0], x_test.shape[1], 64, 64
-        )
-        # Copy observations into first few positions
-        for i in range(x_test.shape[2]):
-            x_test_images[:, :, i, 0] = x_test[:, :, i]
-
-        # Forward pass (skip last few samples to avoid masking edge cases)
+        # x_test shape: (100, 5, 3) - already 3D, pass directly
         log_prob_local, _ = model.deep_set(
-            x_test_images, y_local_test,
-            torch.randn_like(y_local_test[:, 0, :])
+            x_test, y_local_test, y_global_test
         )
 
     # Verify outputs are reasonable

@@ -17,36 +17,33 @@ def hierarchical_gaussian_linear_data():
         num_datasets: int = 100,
         num_events: int = 5,
         dim_per_event: int = 3,
-        dim_global: int = 1,
-        dim_local: int = 1,
         seed: int = 42,
     ):
         """
         Create synthetic hierarchical Gaussian Linear data.
 
+        Model: x_ij ~ N(μ_i, σ) where σ is global and μ_i are local.
+        - Global parameters: σ (1-dim) - noise standard deviation
+        - Local parameters: μ_i (1-dim) - per-event means
+
         Returns:
             x_set: shape (num_datasets, num_events, dim_per_event)
-            y_global: shape (num_datasets, dim_global)
-            y_local: shape (num_datasets, num_events, dim_local)
+            y_global: shape (num_datasets, 1) - noise std
+            y_local: shape (num_datasets, num_events, 1) - means
         """
         torch.manual_seed(seed)
 
-        # Global parameters: σ ~ Gamma(2, 2)
-        # (Using exponential of normal for stability)
-        y_global = torch.randn(num_datasets, dim_global) * 0.5 + 0.5
+        # Global parameter: σ ~ Gamma(2, 2) via exp(N(0.5, 0.5))
+        y_global = torch.randn(num_datasets, 1) * 0.5 + 0.5
         y_global = torch.exp(y_global)  # Ensure positive
 
-        # Local parameters: μ_i ~ N(0, 1)
-        y_local = torch.randn(num_datasets, num_events, dim_local)
+        # Local parameters: μ_i ~ N(0, 1) (1-dim per event)
+        y_local = torch.randn(num_datasets, num_events, 1)
 
-        # Observations: x_ij ~ N(μ_i, σ) for j in [1..dim_per_event]
-        # For each event i and measurement j: x_ij ~ N(μ_i, σ)
-        # Shape: (num_datasets, num_events, dim_per_event)
+        # Observations: x_ij ~ N(μ_i, σ)
         noise = torch.randn(num_datasets, num_events, dim_per_event) * (
             y_global.view(num_datasets, 1, 1)
         )
-        # y_local has shape (num_datasets, num_events, 1)
-        # Expand to (num_datasets, num_events, dim_per_event) for broadcasting
         y_local_expanded = y_local.expand(
             num_datasets, num_events, dim_per_event
         )

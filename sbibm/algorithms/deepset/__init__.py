@@ -10,7 +10,6 @@ from .hierarchical_deepset import (
     HierarchicalDeepSet,
     HierarchicalDeepSetInference,
 )
-from .resnet import ResNetEstimator
 from .utils import build_mlp
 
 __all__ = [
@@ -19,5 +18,4 @@ __all__ = [
     "build_maf",
     "build_nsf",
     "build_mlp",
-    "ResNetEstimator",
 ]
