@@ -62,9 +62,7 @@ class HierarchicalDeepSet(nn.Module):
         )
 
         # Condition local flow on global params if local loss is turned on
-        extra_context = (
-            dim_global if condition_local_on_global else 0
-        )
+        extra_context = dim_global if condition_local_on_global else 0
         self.condition_local_on_global = condition_local_on_global
 
         self.flow_local = build_maf(
@@ -83,25 +81,22 @@ class HierarchicalDeepSet(nn.Module):
     def forward(self, x, y_local, y_global):
         n_batch = x.shape[0]
 
-        lens = torch.randint(
+        set_size = torch.randint(
             low=1,
             high=self.n_set_max + 1,
             size=(n_batch,),
             dtype=torch.float,
         )
         mask = (
-            torch.arange(self.n_set_max).expand(len(lens), self.n_set_max)
-            < torch.Tensor(lens)[:, None]
+            torch.arange(self.n_set_max).expand(len(set_size), self.n_set_max)
+            < torch.Tensor(set_size)[:, None]
         ).to(x.device)
 
         # Flatten to (batch*n_set, n_in) for per-event encoding
-        assert x.ndim == 3, (
-            f"Expected 3D input (batch, n_set, n_in), got shape {x.shape}"
-        )
-        x = rearrange(
-            x, "batch n_set n_in -> (batch n_set) n_in",
-            n_set=self.n_set_max
-        )
+        assert (
+            x.ndim == 3
+        ), f"Expected 3D input (batch, n_set, n_in), got shape {x.shape}"
+        x = rearrange(x, "batch n_set n_in -> (batch n_set) n_in", n_set=self.n_set_max)
         x = self.enc(x)
 
         x = rearrange(
@@ -109,9 +104,7 @@ class HierarchicalDeepSet(nn.Module):
         )
 
         idx_setperm = torch.randperm(self.n_set_max)  # Permutation indices
-        x = (
-            x[:, idx_setperm, :] * mask[:, :, None]
-        )  # Permute set elements and mask
+        x = x[:, idx_setperm, :] * mask[:, :, None]  # Permute set elements and mask
         y_local = y_local[:, idx_setperm, :]
 
         x, x_cond_local = torch.chunk(x, 2, -1)
@@ -119,8 +112,8 @@ class HierarchicalDeepSet(nn.Module):
         x = x.sum(-2) / mask.sum(1)[:, None]
 
         x = torch.cat(
-            [x, lens[:, None].to(x.device)], -1
-        )  # Add cardinality for rho network
+            [x, set_size[:, None].to(x.device)], -1
+        )  # Add cardinality for aggregation network
         x_cond_global = self.dec(x)
 
         x_cond_local = rearrange(
@@ -197,9 +190,7 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         self.global_loss = global_loss
 
         # Condition local flow on global params only if both are turned on
-        condition_local_on_global = (
-            True if (local_loss and global_loss) else False
-        )
+        condition_local_on_global = True if (local_loss and global_loss) else False
 
         self.deep_set = HierarchicalDeepSet(
             condition_local_on_global=condition_local_on_global,
@@ -225,9 +216,7 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
-                "scheduler": self.scheduler(
-                    optimizer, **self.scheduler_kwargs
-                ),
+                "scheduler": self.scheduler(optimizer, **self.scheduler_kwargs),
                 "interval": "epoch",
                 "monitor": "val_loss",
                 "frequency": 1,

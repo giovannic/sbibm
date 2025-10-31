@@ -18,9 +18,12 @@ from sbibm.algorithms.deepset import (
 def test_hierarchical_deepset_instantiation():
     """Test that HierarchicalDeepSet can be instantiated."""
     model = HierarchicalDeepSet(
+        n_in=3,
+        dim_global=1,
+        dim_local=1,
+        n_set_max=5,
         dim_hidden=64,
         condition_local_on_global=True,
-        n_set_max=5,
     )
     assert model is not None
     assert isinstance(model, nn.Module)
@@ -28,20 +31,23 @@ def test_hierarchical_deepset_instantiation():
 
 def test_hierarchical_deepset_forward_pass():
     """Test that HierarchicalDeepSet forward pass produces correct shapes."""
+    n_in = 3
+    dim_global = 1
+    dim_local = 1
     model = HierarchicalDeepSet(
+        n_in=n_in,
+        dim_global=dim_global,
+        dim_local=dim_local,
+        n_set_max=5,
         dim_hidden=64,
         condition_local_on_global=True,
-        n_set_max=5,
     )
 
-    # Create batch of data
+    # Create batch of data (3D: batch, n_set, n_in)
     batch_size = 4
     n_set = 5
-    h, w = 64, 64  # Image dimensions
-    dim_global = 2  # Global parameters
-    dim_local = 4  # Local parameters
 
-    x = torch.randn(batch_size, n_set, h, w)
+    x = torch.randn(batch_size, n_set, n_in)
     y_local = torch.randn(batch_size, n_set, dim_local)
     y_global = torch.randn(batch_size, dim_global)
 
@@ -50,8 +56,7 @@ def test_hierarchical_deepset_forward_pass():
 
     # Check output shapes
     assert log_prob_local.shape == (batch_size,), (
-        f"Expected log_prob_local shape ({batch_size},), "
-        f"got {log_prob_local.shape}"
+        f"Expected log_prob_local shape ({batch_size},), " f"got {log_prob_local.shape}"
     )
     assert log_prob_global.shape == (batch_size,), (
         f"Expected log_prob_global shape ({batch_size},), "
@@ -61,28 +66,30 @@ def test_hierarchical_deepset_forward_pass():
 
 def test_hierarchical_deepset_finite_outputs():
     """Test that HierarchicalDeepSet produces finite outputs (no NaN/Inf)."""
+    n_in = 3
+    dim_global = 1
+    dim_local = 1
     model = HierarchicalDeepSet(
+        n_in=n_in,
+        dim_global=dim_global,
+        dim_local=dim_local,
+        n_set_max=5,
         dim_hidden=64,
         condition_local_on_global=True,
-        n_set_max=5,
     )
 
     batch_size = 4
-    x = torch.randn(batch_size, 5, 64, 64)
-    y_local = torch.randn(batch_size, 5, 4)
-    y_global = torch.randn(batch_size, 2)
+    x = torch.randn(batch_size, 5, n_in)
+    y_local = torch.randn(batch_size, 5, dim_local)
+    y_global = torch.randn(batch_size, dim_global)
 
     log_prob_local, log_prob_global = model(x, y_local, y_global)
 
     # Check for NaN and Inf
     assert not torch.isnan(log_prob_local).any(), "log_prob_local contains NaN"
     assert not torch.isinf(log_prob_local).any(), "log_prob_local contains Inf"
-    assert not torch.isnan(
-        log_prob_global
-    ).any(), "log_prob_global contains NaN"
-    assert not torch.isinf(
-        log_prob_global
-    ).any(), "log_prob_global contains Inf"
+    assert not torch.isnan(log_prob_global).any(), "log_prob_global contains NaN"
+    assert not torch.isinf(log_prob_global).any(), "log_prob_global contains Inf"
 
 
 def test_hierarchical_deepset_loss_computation():
@@ -98,16 +105,19 @@ def test_hierarchical_deepset_loss_computation():
     # Create small synthetic hierarchical data
     batch_size = 4
     n_set = 5
-    h, w = 64, 64
-    dim_global = 2
-    dim_local = 4
+    n_in = 3
+    dim_global = 1
+    dim_local = 1
 
-    x = torch.randn(batch_size, n_set, h, w)
+    x = torch.randn(batch_size, n_set, n_in)
     y_local = torch.randn(batch_size, n_set, dim_local)
     y_global = torch.randn(batch_size, dim_global)
 
     # Create Lightning module for hierarchical inference
     model = HierarchicalDeepSetInference(
+        n_in=n_in,
+        dim_global=dim_global,
+        dim_local=dim_local,
         n_set_max=n_set,
         local_loss=True,
         global_loss=True,
@@ -133,16 +143,22 @@ def test_hierarchical_deepset_loss_computation():
 @pytest.mark.parametrize("n_set_max", [3, 5, 10])
 def test_hierarchical_deepset_different_set_sizes(n_set_max):
     """Test that HierarchicalDeepSet handles different set sizes."""
+    n_in = 3
+    dim_global = 1
+    dim_local = 1
     model = HierarchicalDeepSet(
+        n_in=n_in,
+        dim_global=dim_global,
+        dim_local=dim_local,
+        n_set_max=n_set_max,
         dim_hidden=64,
         condition_local_on_global=True,
-        n_set_max=n_set_max,
     )
 
     batch_size = 2
-    x = torch.randn(batch_size, n_set_max, 64, 64)
-    y_local = torch.randn(batch_size, n_set_max, 4)
-    y_global = torch.randn(batch_size, 2)
+    x = torch.randn(batch_size, n_set_max, n_in)
+    y_local = torch.randn(batch_size, n_set_max, dim_local)
+    y_global = torch.randn(batch_size, dim_global)
 
     log_prob_local, log_prob_global = model(x, y_local, y_global)
 

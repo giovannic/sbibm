@@ -14,9 +14,7 @@ from nflows.nn import nets
 from torch import nn, relu, tanh
 
 
-def build_maf(
-    dim=1, num_transforms=8, context_features=None, hidden_features=128
-):
+def build_maf(dim=1, num_transforms=8, context_features=None, hidden_features=128):
     transform = transforms.CompositeTransform(
         [
             transforms.CompositeTransform(

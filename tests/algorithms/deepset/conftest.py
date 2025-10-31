@@ -13,6 +13,7 @@ def hierarchical_gaussian_linear_data():
 
     Returns a function that generates data with specified parameters.
     """
+
     def _create_data(
         num_datasets: int = 100,
         num_events: int = 5,
@@ -44,9 +45,7 @@ def hierarchical_gaussian_linear_data():
         noise = torch.randn(num_datasets, num_events, dim_per_event) * (
             y_global.view(num_datasets, 1, 1)
         )
-        y_local_expanded = y_local.expand(
-            num_datasets, num_events, dim_per_event
-        )
+        y_local_expanded = y_local.expand(num_datasets, num_events, dim_per_event)
         x_set = y_local_expanded + noise
 
         return x_set, y_global, y_local

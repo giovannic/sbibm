@@ -6,13 +6,9 @@ local parameters on controlled synthetic data.
 """
 
 import torch
-from sbibm.algorithms.deepset import (
-    HierarchicalDeepSet,
-    HierarchicalDeepSetInference,
-)
-from sbibm.algorithms.deepset.training import (
-    train_hierarchical_deepset,
-)
+
+from sbibm.algorithms.deepset import HierarchicalDeepSetInference
+from sbibm.algorithms.deepset.training import train_hierarchical_deepset
 
 
 def test_hierarchical_deepset_convergence_joint(
@@ -84,7 +80,7 @@ def test_hierarchical_deepset_parameter_recovery_global(
     )
 
     # Create test data
-    x_test, y_global_test, _ = create_data(
+    x_test, y_global_test, y_local_test = create_data(
         num_datasets=100,
         num_events=5,
         dim_per_event=3,
@@ -121,19 +117,14 @@ def test_hierarchical_deepset_parameter_recovery_global(
     with torch.no_grad():
         # x_test shape: (100, 5, 3) - already 3D, pass directly
         log_prob_local, log_prob_global = model.deep_set(
-            x_test, y_global_test, y_global_test
+            x_test, y_local_test, y_global_test
         )
 
     # Verify outputs are reasonable
-    assert not torch.isnan(log_prob_global).any(), (
-        "Global log prob contains NaN"
-    )
-    assert not torch.isinf(log_prob_global).any(), (
-        "Global log prob contains Inf"
-    )
+    assert not torch.isnan(log_prob_global).any(), "Global log prob contains NaN"
+    assert not torch.isinf(log_prob_global).any(), "Global log prob contains Inf"
     assert log_prob_global.shape[0] == x_test.shape[0], (
-        f"Expected shape ({x_test.shape[0]},), got "
-        f"{log_prob_global.shape}"
+        f"Expected shape ({x_test.shape[0]},), got " f"{log_prob_global.shape}"
     )
 
 
@@ -157,7 +148,7 @@ def test_hierarchical_deepset_parameter_recovery_local(
     )
 
     # Create test data
-    x_test, _, y_local_test = create_data(
+    x_test, y_global_test, y_local_test = create_data(
         num_datasets=100,
         num_events=5,
         dim_per_event=3,
@@ -193,18 +184,11 @@ def test_hierarchical_deepset_parameter_recovery_local(
     model.eval()
     with torch.no_grad():
         # x_test shape: (100, 5, 3) - already 3D, pass directly
-        log_prob_local, _ = model.deep_set(
-            x_test, y_local_test, y_global_test
-        )
+        log_prob_local, _ = model.deep_set(x_test, y_local_test, y_global_test)
 
     # Verify outputs are reasonable
-    assert not torch.isnan(log_prob_local).any(), (
-        "Local log prob contains NaN"
-    )
-    assert not torch.isinf(log_prob_local).any(), (
-        "Local log prob contains Inf"
-    )
+    assert not torch.isnan(log_prob_local).any(), "Local log prob contains NaN"
+    assert not torch.isinf(log_prob_local).any(), "Local log prob contains Inf"
     assert log_prob_local.shape[0] == x_test.shape[0], (
-        f"Expected shape ({x_test.shape[0]},), got "
-        f"{log_prob_local.shape}"
+        f"Expected shape ({x_test.shape[0]},), got " f"{log_prob_local.shape}"
     )
