@@ -1,3 +1,4 @@
+from sbibm.algorithms.deepset import run as deepset
 from sbibm.algorithms.sbi.mcabc import run as mcabc
 from sbibm.algorithms.sbi.smcabc import run as smcabc
 from sbibm.algorithms.sbi.snle import run as snle
