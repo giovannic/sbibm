@@ -9,23 +9,25 @@ from sbibm.tasks.hierarchical_gaussian_linear.task import (
 pyro.util.set_rng_seed(42)
 
 
-@pytest.mark.parametrize("n_l", [3, 5, 10])
-def test_prior_shape(n_l):
+@pytest.mark.parametrize(
+    "n_l,dim",
+    [(3, 16), (5, 26), (10, 51)],
+)
+def test_prior_shape(n_l, dim):
     """Test prior returns correct shape."""
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
 
     num_samples = 100
     samples = prior(num_samples=num_samples)
 
-    expected_dim = 10 + n_l
-    assert samples.shape == (num_samples, expected_dim)
+    assert samples.shape == (num_samples, dim)
 
 
-@pytest.mark.parametrize("n_l", [3, 5])
-def test_prior_no_nan(n_l):
+@pytest.mark.parametrize("n_l,dim", [(3, 16), (5, 26)])
+def test_prior_no_nan(n_l, dim):
     """Test prior samples contain no NaN or Inf values."""
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
 
     samples = prior(num_samples=1000)
@@ -34,10 +36,13 @@ def test_prior_no_nan(n_l):
     assert not torch.isinf(samples).any()
 
 
-@pytest.mark.parametrize("n_l", [3, 5, 10])
-def test_simulator_shape(n_l):
+@pytest.mark.parametrize(
+    "n_l,dim",
+    [(3, 16), (5, 26), (10, 51)],
+)
+def test_simulator_shape(n_l, dim):
     """Test simulator returns correct shape."""
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
     simulator = task.get_simulator()
 
@@ -45,14 +50,13 @@ def test_simulator_shape(n_l):
     parameters = prior(num_samples=num_samples)
     observations = simulator(parameters)
 
-    expected_dim = 10 * n_l
-    assert observations.shape == (num_samples, expected_dim)
+    assert observations.shape == (num_samples, task.dim_data)
 
 
-@pytest.mark.parametrize("n_l", [3, 5])
-def test_simulator_no_nan(n_l):
+@pytest.mark.parametrize("n_l,dim", [(3, 16), (5, 26)])
+def test_simulator_no_nan(n_l, dim):
     """Test simulator output contains no NaN values."""
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
     simulator = task.get_simulator()
 
@@ -63,32 +67,33 @@ def test_simulator_no_nan(n_l):
 
 
 def test_prior_structure():
-    """Test prior structure: global mean and local scales."""
+    """Test prior structure: global scales and local means."""
     n_l = 5
-    dim = 10
+    dim = 26
     task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
 
     samples = prior(num_samples=1000)
 
-    # First dim params are global mean: should be Normal(0, prior_scale)
-    global_mean = samples[:, :dim]
-    assert global_mean.shape[1] == dim
-    # Check roughly centered at 0 with expected variance
-    # prior_scale=0.1 is the covariance, so std = sqrt(0.1) ≈ 0.316
-    assert abs(global_mean.mean()) < 0.05  # Close to 0
-    assert 0.25 < global_mean.std() < 0.40  # Close to sqrt(0.1)
+    # First dim_global params are global scale: should be positive (HalfNormal)
+    global_scale = samples[:, : task.dim_global]
+    assert global_scale.shape[1] == task.dim_global
+    assert (global_scale > 0).all()
 
-    # Next n_l params are local scales: should be positive (HalfNormal)
-    local_scales = samples[:, dim:]
-    assert local_scales.shape[1] == n_l
-    assert (local_scales >= 0).all()
+    # Remaining params are local means: should be Normal(0, prior_scale)
+    local_means = samples[:, task.dim_global :]  # noqa: E203
+    assert local_means.shape[1] == task.dim_local_total
+    # Check roughly centered at 0 with expected variance
+    # prior_scale=0.1 is std, so variance = 0.01
+    assert abs(local_means.mean()) < 0.05  # Close to 0
+    assert 0.08 < local_means.std() < 0.15  # Close to prior_scale=0.1
 
 
 def test_prior_dist_log_prob():
     """Test prior distribution log_prob."""
     n_l = 3
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    dim = 16  # (16-1)=15, 15%3=0 ✓
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
 
     # Sample from prior
@@ -103,7 +108,9 @@ def test_prior_dist_log_prob():
 
 def test_reference_posterior_not_implemented():
     """Test that reference posterior raises NotImplementedError."""
-    task = HierarchicalGaussianLinear(n_l=3)
+    n_l = 3
+    dim = 16  # (16-1)=15, 15%3=0 ✓
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
 
     with pytest.raises(NotImplementedError):
         task._sample_reference_posterior(num_samples=100, num_observation=1)
@@ -111,7 +118,9 @@ def test_reference_posterior_not_implemented():
 
 def test_get_prior_dist():
     """Test get_prior_dist returns the prior distribution."""
-    task = HierarchicalGaussianLinear(n_l=3)
+    n_l = 3
+    dim = 16  # 1 + 3*5 = 16
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior_dist = task.get_prior_dist()
 
     assert prior_dist is not None
@@ -119,13 +128,14 @@ def test_get_prior_dist():
 
     # Test sampling from returned distribution
     samples = prior_dist.sample((10,))
-    assert samples.shape == (10, 13)  # 10 global + 3 local
+    assert samples.shape == (10, dim)
 
 
 def test_likelihood():
     """Test likelihood computation."""
     n_l = 3
-    task = HierarchicalGaussianLinear(n_l=n_l)
+    dim = 16
+    task = HierarchicalGaussianLinear(n_l=n_l, dim=dim)
     prior = task.get_prior()
     simulator = task.get_simulator()
 

@@ -16,7 +16,7 @@ class HierarchicalGaussianLinear(Task):
     def __init__(
         self,
         n_l: int = 5,
-        dim: int = 10,
+        dim: int = 26,
         prior_scale: float = 0.1,
         simulator_scale: float = 0.1,
     ):
@@ -25,29 +25,55 @@ class HierarchicalGaussianLinear(Task):
         Hierarchical extension of the Gaussian Linear task where each
         observation consists of n_l local contexts. Uses Strategy 1
         (natural global/local split): global parameters represent the shared
-        mean structure, while local parameters represent context-specific
-        noise scales.
+        noise scale, while local parameters represent context-specific means.
+        This follows standard Bayesian regression where variance/scale is
+        pooled globally and means/intercepts are estimated locally per group.
 
-        Global parameters (dim=10):
-            - Mean structure shared across all contexts
-            - Prior: MultivariateNormal(0, prior_scale * I)
+        Total parameter space is divided as:
+            - 1 global noise scale parameter
+            - (dim - 1) / n_l local mean dimensions per context
+            - (dim - 1) total local mean parameters across all n_l contexts
 
-        Local parameters (dim=n_l):
-            - Noise scale per context
-            - Prior: HalfNormal(simulator_scale) for each context
+        Global parameters (dim_global=1):
+            - Noise scale shared across all contexts
+            - Prior: HalfNormal(simulator_scale)
+
+        Local parameters (dim_local_per_context per context,
+        dim_local_per_context * n_l total):
+            - Context-specific mean structure per context
+            - Prior: Normal(0, prior_scale * I) for each dimension
 
         Args:
             n_l: Number of local contexts (default: 5)
-            dim: Dimensionality of global mean parameters (default: 10)
-            prior_scale: Standard deviation of prior on global mean (default:
+            dim: Total dimensionality of parameter space (default: 26,
+                which with default n_l=5 gives 1 + 5*5 = 26)
+            prior_scale: Standard deviation of prior on local means (default:
                 0.1)
-            simulator_scale: Scale parameter for HalfNormal prior on local
-                noise scales (default: 0.1)
+            simulator_scale: Scale parameter for HalfNormal prior on global
+                noise scale (default: 0.1)
+
+        Raises:
+            ValueError: If (dim - 1) does not divide evenly by n_l
         """
         self.n_l = n_l
-        self.dim = dim
         self.prior_scale = prior_scale
         self.simulator_scale = simulator_scale
+
+        # Calculate dimensions: 1 global scale + n_l * dim_local_per_context locals
+        if (dim - 1) % n_l != 0:
+            raise ValueError(
+                f"(dim - 1) = {dim - 1} must be divisible by n_l = {n_l}. "
+                f"Suggested values: {1 + n_l * ((dim - 1) // n_l)}, "
+                f"{1 + n_l * ((dim - 1) // n_l + 1)}"
+            )
+
+        dim_global = 1
+        dim_local_per_context = (dim - 1) // n_l
+        dim_local_total = dim - 1
+
+        self.dim_global = dim_global
+        self.dim_local_per_context = dim_local_per_context
+        self.dim_local_total = dim_local_total
 
         # Observation seeds
         observation_seeds = [
@@ -64,8 +90,8 @@ class HierarchicalGaussianLinear(Task):
         ]
 
         super().__init__(
-            dim_parameters=dim + n_l,  # dim global + n_l local
-            dim_data=dim * n_l,  # dim observations per context
+            dim_parameters=dim,
+            dim_data=dim_local_total,
             name="hierarchical_gaussian_linear",
             name_display="Hierarchical Gaussian Linear",
             num_observations=10,
@@ -77,38 +103,42 @@ class HierarchicalGaussianLinear(Task):
         )
 
         # Define hierarchical prior distribution
-        # Global parameters: mean structure (dim=10)
-        global_dist = pdist.MultivariateNormal(
-            loc=torch.zeros(dim),
-            covariance_matrix=prior_scale * torch.eye(dim),
+        # Global parameters: shared noise scale (dim_global=1)
+        # Expand([1]) to get batch_shape=[], event_shape=[1], then use expand_by
+        # to ensure proper 2D sampling
+        global_dist = pdist.Independent(
+            pdist.HalfNormal(simulator_scale).expand([1]), 1
         )
 
-        # Local parameters: noise scales (dim=n_l), conditioned on global
-        # In this case, local params are independent of global params
-        # (not truly hierarchical in the Bayesian sense, but follows
-        # Strategy 1 design)
+        # Local parameters: context-specific means (dim_local_total total
+        # across all contexts)
         def local_dist_fn(global_params):
-            # Return HalfNormal distribution for n_l noise scales
+            # Return independent Normal distributions for all local means.
+            # dim_local_total = dim_local_per_context * n_l
             # Independent of global_params
             batch_shape = global_params.shape[:-1]
             return pdist.Independent(
-                pdist.HalfNormal(simulator_scale).expand(list(batch_shape) + [n_l]),
+                pdist.Normal(
+                    loc=torch.zeros(dim_local_total),
+                    scale=prior_scale * torch.ones(dim_local_total),
+                ).expand(list(batch_shape) + [dim_local_total]),
                 1,
             )
 
-        self.prior_dist = HierarchicalDistribution(global_dist, local_dist_fn, dim_global=dim, dim_local=n_l)
+        self.prior_dist = HierarchicalDistribution(
+            global_dist, local_dist_fn, dim_global=dim_global, dim_local=dim_local_total
+        )
         self.prior_dist.set_default_validate_args(False)
 
         # Build composite transform (constrained <-> unconstrained)
         transforms_list = []
 
-        # global_mean: Normal (unbounded) - use identity transform
-        for _ in range(dim):
-            transforms_list.append(torch.distributions.transforms.identity_transform)
+        # global_scale: HalfNormal (R+) <-> R
+        transforms_list.append(biject_to(constraints.positive))
 
-        # local_scales: HalfNormal (R+) <-> R
-        for _ in range(n_l):
-            transforms_list.append(biject_to(constraints.positive))
+        # local_means: Normal (unbounded) - use identity transform
+        for _ in range(dim_local_total):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
 
         # Use custom wrapper to ensure Jacobian is properly summed
         self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
@@ -128,7 +158,7 @@ class HierarchicalGaussianLinear(Task):
         """Get simulator function.
 
         For each local context, generates observations from a Gaussian
-        distribution with the global mean and context-specific noise scale.
+        distribution with context-specific mean and global noise scale.
 
         Args:
             max_calls: Maximum number of simulator calls
@@ -139,20 +169,25 @@ class HierarchicalGaussianLinear(Task):
 
         def simulator(parameters):
             # Split parameters into global and local
-            # Global: [:, :dim] (mean structure)
-            # Local: [:, dim:] (n_l noise scales)
-            global_mean = parameters[:, : self.dim]  # noqa: E203
-            local_scales = parameters[:, self.dim :]  # noqa: E203
+            # Global: [:, :dim_global] (shared noise scales)
+            # Local: [:, dim_global:] (dim_local_per_context means per context)
+            global_scale = parameters[:, : self.dim_global]  # noqa: E203
+            local_means = parameters[:, self.dim_global :]  # noqa: E203
 
             # For each local context, sample observations
             observations = []
             for i in range(self.n_l):
-                # Extract noise scale for context i
-                scale_i = local_scales[:, i : i + 1]  # noqa: E203
+                # Extract mean for context i
+                start_idx = i * self.dim_local_per_context
+                end_idx = (i + 1) * self.dim_local_per_context
+                mean_i = local_means[:, start_idx:end_idx]  # noqa: E203
 
-                # Sample observations: Normal(global_mean, scale_i * I)
-                # Broadcast scale_i across all dimensions
-                obs_dist = pdist.Normal(loc=global_mean, scale=scale_i.expand(-1, self.dim))
+                # Sample observations: Normal(mean_i, global_scale * I)
+                # Broadcast global_scale across all dimensions
+                obs_dist = pdist.Normal(
+                    loc=mean_i,
+                    scale=global_scale.expand(-1, self.dim_local_per_context),
+                )
                 obs_i = obs_dist.sample()
 
                 observations.append(obs_i)
@@ -213,24 +248,28 @@ class HierarchicalGaussianLinear(Task):
 
         batch_size = parameters.shape[0]
 
-        # Split parameters: global mean [:, :dim], local scales [:, dim:]
-        global_mean = parameters[:, : self.dim]  # noqa: E203
-        local_scales = parameters[:, self.dim :]  # noqa: E203
+        # Split parameters: global scale [:, :dim_global],
+        # local means [:, dim_global:]
+        global_scale = parameters[:, : self.dim_global]  # noqa: E203
+        local_means = parameters[:, self.dim_global :]  # noqa: E203
 
-        # Split data into n_l contexts (each dim observations)
-        data_split = data.reshape(batch_size, self.n_l, self.dim)
+        # Split data into n_l contexts (each dim_local_per_context observations)
+        data_split = data.reshape(batch_size, self.n_l, self.dim_local_per_context)
 
         # Compute likelihood for each context
         log_likelihoods = []
         for i in range(self.n_l):
-            # Extract data for context i
-            context_data = data_split[:, i, :]  # (batch_size, dim)
-            scale_i = local_scales[:, i : i + 1]  # noqa: E203
+            # Extract data and mean for context i
+            context_data = data_split[:, i, :]
+            start_idx = i * self.dim_local_per_context
+            end_idx = (i + 1) * self.dim_local_per_context
+            mean_i = local_means[:, start_idx:end_idx]  # noqa: E203
 
             # Compute Gaussian log-likelihood:
-            # N(x | global_mean, scale_i^2 * I)
+            # N(x | mean_i, global_scale^2 * I)
             dist = pdist.Normal(
-                loc=global_mean, scale=scale_i.expand(-1, self.dim)
+                loc=mean_i,
+                scale=global_scale.expand(-1, self.dim_local_per_context),
             )
             log_lik_context = dist.log_prob(context_data).sum(dim=1)
 
@@ -239,9 +278,7 @@ class HierarchicalGaussianLinear(Task):
         # Sum log-likelihoods across contexts (product of likelihoods)
         total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
 
-        return total_log_likelihood if log else torch.exp(
-            total_log_likelihood
-        )
+        return total_log_likelihood if log else torch.exp(total_log_likelihood)
 
     def _sample_reference_posterior(
         self,
