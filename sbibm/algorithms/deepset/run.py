@@ -130,7 +130,8 @@ def _split_parameters(task: Task, theta: torch.Tensor):
         theta_local: Local parameters, shape (batch, num_events,
                      dim_local)
     """
-    dim_global = task.dim - task.n_l
+    prior_dist = task.get_prior_dist()
+    dim_global = prior_dist.dim_global
     n_l = task.n_l
 
     theta_global = theta[:, :dim_global]
@@ -155,8 +156,8 @@ def _reshape_observations(task: Task, x: torch.Tensor):
                shape (batch, num_events, dim_per_event)
     """
     batch_size = x.shape[0]
-    dim_per_event = task.dim
     n_events = task.n_l
+    dim_per_event = x.shape[-1] // n_events
 
     x_set = x.reshape(batch_size, n_events, dim_per_event)
     return x_set

@@ -84,10 +84,12 @@ def run_benchmark(
         from sbibm.algorithms.sbi.snle import run as run_algorithm
     elif algorithm == "snre":
         from sbibm.algorithms.sbi.snre import run as run_algorithm
+    elif algorithm == "deepset":
+        from sbibm.algorithms.deepset import run as run_algorithm
     else:
         raise ValueError(
             f"Unknown algorithm: {algorithm}. "
-            f"Choose from: snpe, snle, snre"
+            f"Choose from: snpe, snle, snre, deepset"
         )
 
     # Run algorithm
@@ -209,7 +211,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         type=str,
-        choices=["snpe", "snle", "snre"],
+        choices=["snpe", "snle", "snre", "deepset"],
         required=True,
         help="Algorithm to use",
     )

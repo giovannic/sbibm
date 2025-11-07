@@ -45,15 +45,17 @@ def reverse_kl(
     if log_q.ndim == 0:
         log_q = log_q.unsqueeze(0)
 
-    # Compute log p(theta|y) - true unnormalized log posterior
-    log_p_fn = task._get_log_prob_fn(
-        num_observation=num_observation,
-        implementation="pyro",
-        posterior=True,
-        jit_compile=False,
-        automatic_transform_enabled=False,
-    )
-    log_p = log_p_fn(samples)
+    # Compute log p(theta|y) = log p(theta) + log p(y|theta)
+    prior_dist = task.get_prior_dist()
+    log_p_prior = prior_dist.log_prob(samples)
+
+    # Get observation and compute likelihood
+    observation = task.get_observation(num_observation)
+    # Observations already have batch dimension [1, dim_data]
+    # Expand to match sample batch size
+    observation_expanded = observation.expand(samples.shape[0], -1)
+    log_p_likelihood = task._likelihood(samples, observation_expanded)
+    log_p = log_p_prior + log_p_likelihood
 
     # Compute per-sample KL contributions
     kl_per_sample = log_q - log_p
