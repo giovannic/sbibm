@@ -11,6 +11,7 @@ from pyro.distributions import constraints
 from pyro.distributions.transforms import biject_to
 
 from sbibm.tasks.distributions import (
+    BlockwiseDistribution,
     HierarchicalDistribution,
     SummedStackTransform,
 )
@@ -26,34 +27,40 @@ class HierarchicalLotkaVolterra(Task):
         saveat: float = 0.2,
         total_count: int = 100,
     ):
-        """Hierarchical Lotka-Volterra model
+        """Hierarchical Lotka-Volterra model with partial pooling.
 
-        Hierarchical extension of the Lotka-Volterra task where each
-        observation consists of n_l local contexts (sites). Uses Strategy 1
-        (natural global/local split): predation rate (beta) and predator
-        death rate (gamma) are global (shared across sites), while prey
-        birth rate (alpha) and predator birth rate (delta) are local
-        (site-specific).
+        Hierarchical extension of the Lotka-Volterra task implementing
+        partial pooling with hyperpriors. Each observation consists of n_l
+        local contexts (sites) where all four parameters [alpha, beta,
+        gamma, delta] can vary by site, but are drawn from global
+        hyperpriors that pool information across sites.
 
-        Global parameters (2 total):
-            - beta: Predation rate ~ LogNormal(log(0.028), 0.5)
-            - gamma: Predator death rate ~ LogNormal(log(0.5), 0.5)
+        Global parameters (8 total - hyperpriors):
+            - mu_alpha, mu_beta, mu_gamma, mu_delta: Hyperprior means
+              ~ Normal(0, 1) for each parameter
+            - sigma_alpha, sigma_beta, sigma_gamma, sigma_delta:
+              Hyperprior scales ~ HalfNormal(1)
 
-        Local parameters (2*n_l total):
-            - alpha_i: Prey birth rate per site ~ LogNormal(log(1.0), 0.2)
-            - delta_i: Predator birth rate per site ~ LogNormal(log(0.01), 0.2)
+        Local parameters (4*n_l total - site-specific):
+            - alpha_i, beta_i, gamma_i, delta_i per site
+            - Each site's parameters ~ LogNormal(mu_global, sigma_global)
 
-        This represents multi-site ecological studies where predation dynamics
-        are consistent but birth rates vary by local environmental conditions.
+        The Lotka-Volterra ODE model:
+            dx/dt = alpha*x - beta*x*y
+            dy/dt = -gamma*y + delta*x*y
+
+        where x=prey population, y=predator population.
 
         Observations are LogNormal-distributed with the trajectory as the
-        mean in log-space, ensuring bounded likelihood for numerical stability.
+        mean in log-space, ensuring bounded likelihood for numerical
+        stability.
 
         Args:
             n_l: Number of local contexts/sites (default: 5)
             days: Number of days to simulate (default: 20.0)
             saveat: Time step for saving trajectory (default: 0.2)
-            total_count: Scaling factor for Poisson observations (default: 100)
+            total_count: Scaling factor for Poisson observations
+                (default: 100)
         """
         self.n_l = n_l
         self.days = days
@@ -62,7 +69,7 @@ class HierarchicalLotkaVolterra(Task):
 
         # Calculate raw data dimensions
         # For subsampling: every 21st time point from trajectory
-        # Original: int(days/saveat + 1) = 101 points, subsample -> 5 points
+        # Original: int(days/saveat + 1) = 101 points, subsample -> 5
         # Per site: 2 species * 5 time points = 10 observations
         dim_data = 10 * n_l
 
@@ -81,7 +88,7 @@ class HierarchicalLotkaVolterra(Task):
         ]
 
         super().__init__(
-            dim_parameters=2 + 2 * n_l,  # 2 global + 2*n_l local
+            dim_parameters=8 + 4 * n_l,  # 8 global + 4*n_l local
             dim_data=dim_data,
             name="hierarchical_lotka_volterra",
             name_display="Hierarchical Lotka-Volterra",
@@ -92,63 +99,80 @@ class HierarchicalLotkaVolterra(Task):
             path=Path(__file__).parent.absolute(),
         )
 
-        # Global distribution: predation rate (beta) and predator death (gamma)
-        # beta ~ LogNormal(log(0.028), 0.5)
-        # gamma ~ LogNormal(log(0.5), 0.5)
-        mu_beta = torch.log(torch.tensor(0.028))
-        mu_gamma = torch.log(torch.tensor(0.5))
-        sigma_global = 0.5
+        # Global distribution: hyperpriors for mean and scale of each
+        # parameter
+        # [mu_alpha, mu_beta, mu_gamma, mu_delta, sigma_alpha,
+        # sigma_beta, sigma_gamma, sigma_delta]
+        # Use smaller scale for hyperprior scales (0.5) to avoid extreme
+        # parameter values that cause ODE solver failures
+        global_components = [
+            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            # mu_alpha
+            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            # mu_beta
+            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            # mu_gamma
+            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            # mu_delta
+            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            # sigma_alpha
+            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            # sigma_beta
+            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            # sigma_gamma
+            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            # sigma_delta
+        ]
 
-        global_dist = pdist.Independent(
-            pdist.LogNormal(
-                loc=torch.tensor([mu_beta, mu_gamma]),
-                scale=torch.tensor([sigma_global, sigma_global]),
-            ),
-            1,
-        )
+        global_dist = BlockwiseDistribution(global_components)
         global_dist.set_default_validate_args(False)
 
-        # Local distribution: prey birth (alpha_i) and predator birth (delta_i)
-        # per site
-        # alpha_i ~ LogNormal(log(1.0), 0.2)
-        # delta_i ~ LogNormal(log(0.01), 0.2)
+        # Local distribution: site-specific parameters drawn from
+        # hyperpriors
+        # For each site: [alpha_i, beta_i, gamma_i, delta_i] ~
+        # LogNormal(mu_global, sigma_global)
         def local_dist_fn(global_params):
-            # global_params shape: [..., 2]
-            batch_shape = global_params.shape[:-1]
-            mu_alpha = torch.log(torch.tensor(1.0))
-            mu_delta = torch.log(torch.tensor(0.01))
-            sigma_local = 0.2
+            # global_params shape: [..., 8]
+            # Extract means and scales
+            mu = global_params[..., :4]  # [..., 4] means
+            sigma = global_params[..., 4:]  # [..., 4] scales
 
-            # Each site has 2 parameters: alpha_i, delta_i
-            loc = torch.stack(
-                [
-                    torch.full(list(batch_shape) + [n_l], mu_alpha.item()),
-                    torch.full(list(batch_shape) + [n_l], mu_delta.item()),
-                ],
-                dim=-1,
-            ).reshape(
-                list(batch_shape) + [2 * n_l]
-            )  # [..., 2*n_l]
+            # Create independent LogNormal for each site's parameters
+            # Stack n_l times with same hyperpriors
+            loc_list = []
+            scale_list = []
+            for _ in range(n_l):
+                loc_list.append(mu)
+                scale_list.append(sigma)
 
-            scale = torch.full_like(loc, sigma_local)
+            # Concatenate across sites: [..., 4*n_l]
+            loc = torch.cat(loc_list, dim=-1)
+            scale = torch.cat(scale_list, dim=-1)
 
             return pdist.Independent(pdist.LogNormal(loc, scale), 1)
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=2, dim_local=2 * n_l
+            global_dist,
+            local_dist_fn,
+            dim_global=8,
+            dim_local=4 * n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 
         # Build composite transform (constrained <-> unconstrained)
-        # All parameters are log-scale (positive real) -> R
+        # All parameters are positive (LogNormal in local) -> R
         transforms_list = []
 
-        # Global parameters: 2 (beta, gamma) - all LogNormal
-        for _ in range(2):
+        # Global hyperprior means: unbounded (Normal)
+        for _ in range(4):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
+
+        # Global hyperprior scales: positive (HalfNormal)
+        for _ in range(4):
             transforms_list.append(biject_to(constraints.positive))
 
-        # Local parameters: 2*n_l - all LogNormal (alpha_i, delta_i per site)
-        for _ in range(2 * n_l):
+        # Local parameters: all positive (LogNormal)
+        for _ in range(4 * n_l):
             transforms_list.append(biject_to(constraints.positive))
 
         # Use custom wrapper to ensure Jacobian is properly summed
@@ -190,17 +214,17 @@ class HierarchicalLotkaVolterra(Task):
         """Solve hierarchical LV ODE for batched parameters.
 
         Parameters are structured as:
-        - [:, 0:2]: global params [beta, gamma]
-        - [:, 2:]: local params [alpha_1, delta_1, ..., alpha_n_l,
-          delta_n_l]
+        - [:, 0:8]: global hyperprior params [mu_alpha, mu_beta,
+          mu_gamma, mu_delta, sigma_alpha, sigma_beta, sigma_gamma,
+          sigma_delta]
+        - [:, 8:]: local params [alpha_1, beta_1, gamma_1, delta_1,
+          ..., alpha_n_l, beta_n_l, gamma_n_l, delta_n_l]
 
-        We expand this to (num_samples * n_l, 4) with
-        [alpha_i, beta, gamma, delta_i] for each batch element.
+        We expand this to (num_samples * n_l, 4) with [alpha_i,
+        beta_i, gamma_i, delta_i] for each batch element.
 
         Args:
-            parameters: Shape (num_samples, 2 + 2*n_l) with
-                [beta, gamma, alpha_1, delta_1, ..., alpha_n_l,
-                delta_n_l]
+            parameters: Shape (num_samples, 8 + 4*n_l)
 
         Returns:
             Trajectories shape (num_samples, n_l, 2, num_timepoints)
@@ -208,28 +232,27 @@ class HierarchicalLotkaVolterra(Task):
         num_samples = parameters.shape[0]
         t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
 
-        # Extract global and local parameters
-        global_params = parameters[:, :2]  # (num_samples, 2)
-        local_params = parameters[:, 2:]  # (num_samples, 2*n_l)
+        # Extract local parameters
+        local_params = parameters[:, 8:]  # (num_samples, 4*n_l)
 
-        # Reshape local params to (num_samples, n_l, 2)
-        # where each site has [alpha_i, delta_i]
-        local_reshaped = local_params.reshape(num_samples, self.n_l, 2)
+        # Reshape local params to (num_samples, n_l, 4)
+        # where each site has [alpha_i, beta_i, gamma_i, delta_i]
+        local_reshaped = local_params.reshape(num_samples, self.n_l, 4)
 
         # Create flattened batch: (num_samples * n_l, 4)
         # For each (sample, site) pair, we need [alpha, beta,
         # gamma, delta]
         alpha_flat = local_reshaped[:, :, 0].reshape(-1)
-        delta_flat = local_reshaped[:, :, 1].reshape(-1)
-        beta_expanded = global_params[:, 0].repeat_interleave(self.n_l)
-        gamma_expanded = global_params[:, 1].repeat_interleave(self.n_l)
+        beta_flat = local_reshaped[:, :, 1].reshape(-1)
+        gamma_flat = local_reshaped[:, :, 2].reshape(-1)
+        delta_flat = local_reshaped[:, :, 3].reshape(-1)
 
         # Stack into args format: (num_samples * n_l, 4)
         params_jax = jnp.stack(
             [
                 alpha_flat.numpy(),
-                beta_expanded.numpy(),
-                gamma_expanded.numpy(),
+                beta_flat.numpy(),
+                gamma_flat.numpy(),
                 delta_flat.numpy(),
             ],
             axis=1,
@@ -319,9 +342,12 @@ class HierarchicalLotkaVolterra(Task):
             """Simulates Lotka-Volterra for hierarchical parameters.
 
             Parameters structure:
-                - Global: [beta, gamma] (first 2 dims)
-                - Local: [alpha_1, delta_1, alpha_2, delta_2, ...]
-                  (next 2*n_l)
+                - Global: [mu_alpha, mu_beta, mu_gamma, mu_delta,
+                  sigma_alpha, sigma_beta, sigma_gamma, sigma_delta]
+                  (first 8 dims)
+                - Local: [alpha_1, beta_1, gamma_1, delta_1, ...,
+                  alpha_n_l, beta_n_l, gamma_n_l, delta_n_l]
+                  (next 4*n_l)
 
             Returns LogNormal-distributed observations.
             """
@@ -379,9 +405,15 @@ class HierarchicalLotkaVolterra(Task):
         naturally bounded since LogNormal log-likelihood is always
         finite.
 
+        Parameters structure:
+            - Global: [mu_alpha, mu_beta, mu_gamma, mu_delta,
+              sigma_alpha, sigma_beta, sigma_gamma, sigma_delta]
+            - Local: [alpha_1, beta_1, gamma_1, delta_1, ...,
+              alpha_n_l, beta_n_l, gamma_n_l, delta_n_l]
+
         Args:
             parameters: Parameter tensor with shape
-                (num_samples, dim_parameters)
+                (num_samples, 8 + 4*n_l)
             data: Observation tensor with shape (num_samples, dim_data)
             log: If True, return log-likelihood; otherwise return
                 likelihood
@@ -417,7 +449,7 @@ class HierarchicalLotkaVolterra(Task):
                 u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
 
                 # Get observed data for this context
-                obs = data[b, i * 10 : (i + 1) * 10]
+                obs = data[b, i * 10 : (i + 1) * 10]  # noqa: E203
 
                 # Compute LogNormal log-likelihood
                 lognormal_dist = torch.distributions.LogNormal(

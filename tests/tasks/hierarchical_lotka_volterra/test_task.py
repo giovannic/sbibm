@@ -18,7 +18,7 @@ def test_prior_shape(n_l):
     num_samples = 100
     samples = prior(num_samples=num_samples)
 
-    expected_dim = 2 + 2 * n_l  # 2 global (beta, gamma) + 2*n_l local
+    expected_dim = 8 + 4 * n_l  # 8 global hyperpriors + 4*n_l local
     assert samples.shape == (num_samples, expected_dim)
 
 
@@ -55,7 +55,7 @@ def test_simulator_no_nan(n_l):
     task = HierarchicalLotkaVolterra(n_l=n_l)
     prior = task.get_prior()
     simulator = task.get_simulator()
-    num_samples = 10
+    num_samples = 100
 
     parameters = prior(num_samples=num_samples)
     observations = simulator(parameters)
@@ -66,41 +66,36 @@ def test_simulator_no_nan(n_l):
 
 
 def test_prior_structure():
-    """Test prior structure: global predation params and local birth params."""
+    """Test prior structure: hyperpriors for means/scales and local
+    site-specific parameters."""
     n_l = 5
     task = HierarchicalLotkaVolterra(n_l=n_l)
     prior = task.get_prior()
 
     samples = prior(num_samples=1000)
 
-    # First 2 params are global: beta (predation), gamma (predator death)
-    # beta ~ LogNormal(log(0.028), 0.5)
-    # gamma ~ LogNormal(log(0.5), 0.5)
-    global_params = samples[:, :2]
-    assert global_params.shape == (1000, 2)
+    # First 8 params are global hyperpriors:
+    # [mu_alpha, mu_beta, mu_gamma, mu_delta, sigma_alpha,
+    # sigma_beta, sigma_gamma, sigma_delta]
+    global_params = samples[:, :8]
+    assert global_params.shape == (1000, 8)
 
-    # Beta should be centered around 0.028 (in log space)
-    assert (
-        torch.abs(
-            torch.log(global_params[:, 0]).mean() - torch.log(torch.tensor(0.028))
-        )
-        < 0.2
-    )
+    # First 4 are means: mu ~ Normal(0, 1) (unbounded)
+    means = global_params[:, :4]
+    # Means should have reasonable range for Normal(0,1)
+    assert means.mean() < 0.5  # Should be near 0
+    assert means.std() > 0.5  # Should have non-zero spread
 
-    # Gamma should be centered around 0.5 (in log space)
-    assert (
-        torch.abs(torch.log(global_params[:, 1]).mean() - torch.log(torch.tensor(0.5)))
-        < 0.2
-    )
+    # Last 4 are scales: sigma ~ HalfNormal(1) (positive)
+    scales = global_params[:, 4:]
+    assert (scales > 0).all()  # All positive
+    assert scales.mean() < 1.0  # Should be positive but not huge
 
-    # All global params should be positive (LogNormal)
-    assert (global_params > 0).all()
-
-    # Local params: alpha_i (prey birth) and delta_i (predator birth) per site
-    # alpha_i ~ LogNormal(log(1.0), 0.2)
-    # delta_i ~ LogNormal(log(0.01), 0.2)
-    local_params = samples[:, 2:]
-    assert local_params.shape == (1000, 2 * n_l)
+    # Local params: [alpha_1, beta_1, gamma_1, delta_1, ...,
+    # alpha_n_l, beta_n_l, gamma_n_l, delta_n_l]
+    # Each parameter ~ LogNormal(mu_global, sigma_global) so all positive
+    local_params = samples[:, 8:]
+    assert local_params.shape == (1000, 4 * n_l)
 
     # All local params should be positive (LogNormal)
     assert (local_params > 0).all()
