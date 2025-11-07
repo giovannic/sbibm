@@ -252,6 +252,12 @@ def main():
         help="Number of rounds for sequential algorithms (SNPE/SNLE/SNRE)",
     )
     parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device to run on (cpu, cuda, cuda:0, cuda:1, etc.)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
@@ -272,6 +278,7 @@ def main():
     log.info(f"Observation: {args.num_observation}")
     log.info(f"Output directory: {args.output_dir}")
     log.info(f"Seed: {args.seed}")
+    log.info(f"Device: {args.device}")
     log.info("=" * 80)
 
     # Run benchmark
@@ -284,6 +291,7 @@ def main():
         seed=args.seed,
         num_samples=args.num_samples,
         num_rounds=args.num_rounds,
+        device=args.device,
         automatic_transforms_enabled=True,
     )
 

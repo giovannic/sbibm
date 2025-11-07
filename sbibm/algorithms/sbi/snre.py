@@ -42,6 +42,7 @@ def run(
     z_score_theta: str = "independent",
     variant: str = "B",
     max_num_epochs: int = 2**31 - 1,
+    device: str = "cpu",
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
     """Runs (S)NRE from `sbi`
 
@@ -64,6 +65,7 @@ def run(
         z_score_theta: Whether to z-score theta
         variant: Can be used to switch between SNRE-A (AALR) and -B (SRE)
         max_num_epochs: Maximum number of epochs
+        device: Device to use (cpu, cuda, cuda:0, etc.)
 
     Returns:
         Samples from posterior, number of simulator calls, log probability of true params if computable
@@ -116,7 +118,9 @@ def run(
     else:
         raise NotImplementedError
 
-    inference_method = inference_class(classifier=classifier, prior=prior)
+    inference_method = inference_class(
+        classifier=classifier, prior=prior, device=device
+    )
 
     posteriors = []
     proposal = prior

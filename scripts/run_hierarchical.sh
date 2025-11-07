@@ -1,5 +1,22 @@
 #!/bin/bash
 
+# Default device
+DEVICE="cpu"
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --device)
+      DEVICE="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
 # Loop through all hierarchical tasks except bernoulli_glm
 TASKS=(
   "hierarchical_gaussian_linear"
@@ -13,6 +30,8 @@ TASKS=(
 
 ALGORITHMS=("snpe" "deepset")
 
+echo "Running benchmarks with device: $DEVICE"
+
 for ALGORITHM in "${ALGORITHMS[@]}"; do
   for TASK in "${TASKS[@]}"; do
     echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM"
@@ -22,6 +41,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_simulations 1000 \
       --num_observation 1 \
       --output_dir test_results \
+      --device "$DEVICE" \
       --seed 42 \
       --num_samples 100
 
@@ -31,6 +51,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_simulations 5000 \
       --num_observation 1 \
       --output_dir test_results \
+      --device "$DEVICE" \
       --seed 42 \
       --num_samples 100
 
@@ -40,6 +61,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_simulations 10000 \
       --num_observation 1 \
       --output_dir test_results \
+      --device "$DEVICE" \
       --seed 42 \
       --num_samples 100
 
@@ -51,4 +73,4 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
   done
 done
 
-echo "All tasks completed!" 
+echo "All tasks completed!"

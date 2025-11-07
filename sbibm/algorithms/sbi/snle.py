@@ -41,6 +41,7 @@ def run(
     z_score_x: str = "independent",
     z_score_theta: str = "independent",
     max_num_epochs: int = 2**31 - 1,
+    device: str = "cpu",
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor]]:
     """Runs (S)NLE from `sbi`
 
@@ -61,6 +62,7 @@ def run(
         z_score_x: Whether to z-score x
         z_score_theta: Whether to z-score theta
         max_num_epochs: Maximum number of epochs
+        device: Device to use (cpu, cuda, cuda:0, etc.)
 
     Returns:
         Samples from posterior, number of simulator calls, log probability of true params if computable
@@ -107,6 +109,7 @@ def run(
     inference_method = inference.SNLE_A(
         density_estimator=density_estimator_fun,
         prior=prior,
+        device=device,
     )
 
     posteriors = []
