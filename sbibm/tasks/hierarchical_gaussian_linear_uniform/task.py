@@ -19,7 +19,7 @@ class HierarchicalGaussianLinearUniform(Task):
     def __init__(
         self,
         n_l: int = 5,
-        dim: int = 10,
+        dim: int = 26,
         prior_bound: float = 10.0,
         simulator_scale: float = 0.1,
     ):
@@ -28,29 +28,58 @@ class HierarchicalGaussianLinearUniform(Task):
         Hierarchical extension of the Gaussian Linear Uniform task where
         each observation consists of n_l local contexts. Uses Strategy 1
         (natural global/local split): global parameters represent the shared
-        mean structure with uniform prior, while local parameters represent
-        context-specific noise scales.
+        noise scale, while local parameters represent context-specific means
+        bounded by a uniform prior.
+        This follows standard Bayesian regression where variance/scale is
+        pooled globally and means/intercepts are estimated locally per group
+        with bounded support.
 
-        Global parameters (dim=10):
-            - Mean structure shared across all contexts
-            - Prior: Uniform(-prior_bound, +prior_bound) for each dimension
+        Total parameter space is divided as:
+            - 1 global noise scale parameter
+            - (dim - 1) / n_l local mean dimensions per context
+            - (dim - 1) total local mean parameters across all n_l contexts
 
-        Local parameters (dim=n_l):
-            - Noise scale per context
-            - Prior: HalfNormal(simulator_scale) for each context
+        Global parameters (dim_global=1):
+            - Noise scale shared across all contexts
+            - Prior: HalfNormal(simulator_scale)
+
+        Local parameters (dim_local_per_context per context,
+        dim_local_per_context * n_l total):
+            - Context-specific mean structure per context
+            - Prior: Uniform[-prior_bound, +prior_bound] for each dimension
 
         Args:
             n_l: Number of local contexts (default: 5)
-            dim: Dimensionality of global mean parameters (default: 10)
-            prior_bound: Bound for uniform prior on global mean
+            dim: Total dimensionality of parameter space (default: 26,
+                which with default n_l=5 gives 1 + 5*5 = 26)
+            prior_bound: Bound for uniform prior on local means
                 (default: 10.0)
-            simulator_scale: Scale parameter for HalfNormal prior on local
-                noise scales (default: 0.1)
+            simulator_scale: Scale parameter for HalfNormal prior on global
+                noise scale (default: 0.1)
+
+        Raises:
+            ValueError: If (dim - 1) does not divide evenly by n_l
         """
         self.n_l = n_l
-        self.dim = dim
         self.prior_bound = prior_bound
         self.simulator_scale = simulator_scale
+
+        # Calculate dimensions: 1 global scale + n_l * dim_local_per_context
+        # locals
+        if (dim - 1) % n_l != 0:
+            raise ValueError(
+                f"(dim - 1) = {dim - 1} must be divisible by n_l = {n_l}. "
+                f"Suggested values: {1 + n_l * ((dim - 1) // n_l)}, "
+                f"{1 + n_l * ((dim - 1) // n_l + 1)}"
+            )
+
+        dim_global = 1
+        dim_local_per_context = (dim - 1) // n_l
+        dim_local_total = dim - 1
+
+        self.dim_global = dim_global
+        self.dim_local_per_context = dim_local_per_context
+        self.dim_local_total = dim_local_total
 
         # Observation seeds
         observation_seeds = [
@@ -67,8 +96,8 @@ class HierarchicalGaussianLinearUniform(Task):
         ]
 
         super().__init__(
-            dim_parameters=dim + n_l,  # dim global + n_l local
-            dim_data=dim * n_l,  # dim observations per context
+            dim_parameters=dim,
+            dim_data=dim_local_total,
             name="hierarchical_gaussian_linear_uniform",
             name_display="Hierarchical Gaussian Linear Uniform",
             num_observations=10,
@@ -80,51 +109,48 @@ class HierarchicalGaussianLinearUniform(Task):
         )
 
         # Define hierarchical prior distribution
-        # Global parameters: mean structure (dim=10) with uniform prior
+        # Global parameters: shared noise scale (dim_global=1)
         global_dist = pdist.Independent(
-            pdist.Uniform(
-                low=-prior_bound * torch.ones(dim),
-                high=+prior_bound * torch.ones(dim),
-            ),
-            1,
+            pdist.HalfNormal(simulator_scale).expand([1]), 1
         )
 
-        # Local parameters: noise scales (dim=n_l), independent of global
+        # Local parameters: context-specific means bounded by uniform prior
+        # (dim_local_total total across all contexts)
         def local_dist_fn(global_params):
-            # Return HalfNormal distribution for n_l noise scales
+            # Return independent Uniform distributions for all local means.
+            # dim_local_total = dim_local_per_context * n_l
             # Independent of global_params
             batch_shape = global_params.shape[:-1]
             return pdist.Independent(
-                pdist.HalfNormal(simulator_scale).expand(
-                    list(batch_shape) + [n_l]
-                ),
+                pdist.Uniform(
+                    low=-prior_bound * torch.ones(dim_local_total),
+                    high=+prior_bound * torch.ones(dim_local_total),
+                ).expand(list(batch_shape) + [dim_local_total]),
                 1,
             )
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=dim, dim_local=n_l
+            global_dist,
+            local_dist_fn,
+            dim_global=dim_global,
+            dim_local=dim_local_total,
         )
         self.prior_dist.set_default_validate_args(False)
 
         # Build composite transform (constrained <-> unconstrained)
         transforms_list = []
 
-        # global_mean: Uniform (bounded) - use biject_to(interval)
-        for _ in range(dim):
+        # global_scale: HalfNormal (R+) <-> R
+        transforms_list.append(biject_to(constraints.positive))
+
+        # local_means: Uniform (bounded) - use interval transform
+        for _ in range(dim_local_total):
             transforms_list.append(
-                biject_to(
-                    constraints.interval(-prior_bound, +prior_bound)
-                )
+                biject_to(constraints.interval(-prior_bound, +prior_bound))
             )
 
-        # local_scales: HalfNormal (R+) <-> R
-        for _ in range(n_l):
-            transforms_list.append(biject_to(constraints.positive))
-
         # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(
-            transforms_list, dim=-1
-        )
+        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
 
     def get_prior(self):
         """Get prior distribution.
@@ -133,9 +159,7 @@ class HierarchicalGaussianLinearUniform(Task):
         """
 
         def prior(num_samples=1):
-            return pyro.sample(
-                "parameters", self.prior_dist.expand_by([num_samples])
-            )
+            return pyro.sample("parameters", self.prior_dist.expand_by([num_samples]))
 
         return prior
 
@@ -143,7 +167,7 @@ class HierarchicalGaussianLinearUniform(Task):
         """Get simulator function.
 
         For each local context, generates observations from a Gaussian
-        distribution with the global mean and context-specific noise scale.
+        distribution with context-specific mean and global noise scale.
 
         Args:
             max_calls: Maximum number of simulator calls
@@ -154,21 +178,24 @@ class HierarchicalGaussianLinearUniform(Task):
 
         def simulator(parameters):
             # Split parameters into global and local
-            # Global: [:, :dim] (mean structure)
-            # Local: [:, dim:] (n_l noise scales)
-            global_mean = parameters[:, : self.dim]  # noqa: E203
-            local_scales = parameters[:, self.dim :]  # noqa: E203
+            # Global: [:, :dim_global] (shared noise scales)
+            # Local: [:, dim_global:] (dim_local_per_context means per context)
+            global_scale = parameters[:, : self.dim_global]  # noqa: E203
+            local_means = parameters[:, self.dim_global :]  # noqa: E203
 
             # For each local context, sample observations
             observations = []
             for i in range(self.n_l):
-                # Extract noise scale for context i
-                scale_i = local_scales[:, i : i + 1]  # noqa: E203
+                # Extract mean for context i
+                start_idx = i * self.dim_local_per_context
+                end_idx = (i + 1) * self.dim_local_per_context
+                mean_i = local_means[:, start_idx:end_idx]  # noqa: E203
 
-                # Sample observations: Normal(global_mean, scale_i * I)
-                # Broadcast scale_i across all dimensions
+                # Sample observations: Normal(mean_i, global_scale * I)
+                # Broadcast global_scale across all dimensions
                 obs_dist = pdist.Normal(
-                    loc=global_mean, scale=scale_i.expand(-1, self.dim)
+                    loc=mean_i,
+                    scale=global_scale.expand(-1, self.dim_local_per_context),
                 )
                 obs_i = obs_dist.sample()
 
@@ -189,9 +216,7 @@ class HierarchicalGaussianLinearUniform(Task):
         """
         return self.prior_dist
 
-    def _get_transforms(
-        self, automatic_transforms_enabled: bool = True, **kwargs: Any
-    ):
+    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
         """Get transforms for converting between constrained and
         unconstrained space.
 
@@ -234,24 +259,29 @@ class HierarchicalGaussianLinearUniform(Task):
 
         batch_size = parameters.shape[0]
 
-        # Split parameters: global mean [:, :dim], local scales [:, dim:]
-        global_mean = parameters[:, : self.dim]  # noqa: E203
-        local_scales = parameters[:, self.dim :]  # noqa: E203
+        # Split parameters: global scale [:, :dim_global],
+        # local means [:, dim_global:]
+        global_scale = parameters[:, : self.dim_global]  # noqa: E203
+        local_means = parameters[:, self.dim_global :]  # noqa: E203
 
-        # Split data into n_l contexts (each dim observations)
-        data_split = data.reshape(batch_size, self.n_l, self.dim)
+        # Split data into n_l contexts (each dim_local_per_context
+        # observations)
+        data_split = data.reshape(batch_size, self.n_l, self.dim_local_per_context)
 
         # Compute likelihood for each context
         log_likelihoods = []
         for i in range(self.n_l):
-            # Extract data for context i
-            context_data = data_split[:, i, :]  # (batch_size, dim)
-            scale_i = local_scales[:, i : i + 1]  # noqa: E203
+            # Extract data and mean for context i
+            context_data = data_split[:, i, :]
+            start_idx = i * self.dim_local_per_context
+            end_idx = (i + 1) * self.dim_local_per_context
+            mean_i = local_means[:, start_idx:end_idx]  # noqa: E203
 
             # Compute Gaussian log-likelihood:
-            # N(x | global_mean, scale_i^2 * I)
+            # N(x | mean_i, global_scale^2 * I)
             dist = pdist.Normal(
-                loc=global_mean, scale=scale_i.expand(-1, self.dim)
+                loc=mean_i,
+                scale=global_scale.expand(-1, self.dim_local_per_context),
             )
             log_lik_context = dist.log_prob(context_data).sum(dim=1)
 
@@ -260,9 +290,7 @@ class HierarchicalGaussianLinearUniform(Task):
         # Sum log-likelihoods across contexts (product of likelihoods)
         total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
 
-        return total_log_likelihood if log else torch.exp(
-            total_log_likelihood
-        )
+        return total_log_likelihood if log else torch.exp(total_log_likelihood)
 
     def _sample_reference_posterior(
         self,

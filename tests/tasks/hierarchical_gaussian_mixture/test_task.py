@@ -65,7 +65,7 @@ def test_simulator_no_nan(n_l):
 
 
 def test_prior_structure():
-    """Test prior structure: global locs, scales, and local params."""
+    """Test prior structure: global locs, scales, and bounded local params."""
     n_l = 5
     dim = 2
     prior_bound = 10.0
@@ -80,13 +80,15 @@ def test_prior_structure():
     assert global_locs.max() <= prior_bound
 
     # Next dim params are global scales: should be positive (HalfNormal)
-    global_scales = samples[:, dim : 2 * dim]
+    global_scales = samples[:, dim : 2 * dim]  # noqa: E203
     assert (global_scales >= 0).all()
 
-    # Remaining dim*n_l params are local: should be Normal(global_loc,
-    # global_scale)
-    local_params = samples[:, 2 * dim :]
+    # Remaining dim*n_l params are local: TruncatedNormal with bounded support
+    local_params = samples[:, 2 * dim :]  # noqa: E203
     assert local_params.shape[1] == dim * n_l
+    # Check bounded support (TruncatedNormal)
+    assert torch.all(local_params >= -prior_bound)
+    assert torch.all(local_params <= prior_bound)
 
 
 def test_prior_dist_log_prob():

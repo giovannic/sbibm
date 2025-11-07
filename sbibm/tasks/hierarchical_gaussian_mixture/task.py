@@ -11,6 +11,7 @@ from sbibm.tasks.distributions import (
     BlockwiseDistribution,
     HierarchicalDistribution,
     SummedStackTransform,
+    TruncatedNormal,
 )
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
@@ -37,7 +38,10 @@ class HierarchicalGaussianMixture(Task):
               (HalfNormal(1.0))
 
         Local parameters (dim * n_l total):
-            - For each context i: theta_i ~ Normal(global_loc, global_scale)
+            - For each context i: theta_i ~ TruncatedNormal(global_loc,
+              global_scale, low=-prior_bound, high=+prior_bound)
+            - Bounds follow Bayesian regression convention where local
+              parameters are constrained to reasonable support region.
 
         The simulator uses a mixture of Gaussians with two components for
         each local context independently.
@@ -46,11 +50,12 @@ class HierarchicalGaussianMixture(Task):
             n_l: Number of local contexts (default: 5)
             dim: Dimensionality of parameters and data per context
                 (default: 2)
-            prior_bound: Prior bound for global location parameters
+            prior_bound: Prior bound for location parameters
                 (default: 10.0)
         """
         self.n_l = n_l
         self.dim = dim
+        self.prior_bound = prior_bound
 
         # Observation seeds (same as original task)
         observation_seeds = [
@@ -100,10 +105,10 @@ class HierarchicalGaussianMixture(Task):
             # global_params shape: [..., 2*dim]
             # Extract locs and scales
             locs = global_params[..., :dim]  # [..., dim]
-            scales = global_params[..., dim : 2 * dim]  # [..., dim]
+            scales = global_params[..., dim : 2 * dim]  # noqa: E203 [..., dim]
 
             # Create distribution for all local params (dim*n_l dims)
-            # Each local param (dim-D) is Normal(loc, scale)
+            # Each local param (dim-D) is TruncatedNormal with bounded support
             # Replicate locs and scales for n_l contexts
             batch_shape = global_params.shape[:-1]
             locs_expanded = (
@@ -117,7 +122,16 @@ class HierarchicalGaussianMixture(Task):
                 .reshape(list(batch_shape) + [dim * n_l])
             )
 
-            return pdist.Independent(pdist.Normal(locs_expanded, scales_expanded), 1)
+            # Use TruncatedNormal with bounded support [-prior_bound, prior_bound]
+            return pdist.Independent(
+                TruncatedNormal(
+                    loc=locs_expanded,
+                    scale=scales_expanded,
+                    low=-prior_bound,
+                    high=+prior_bound,
+                ),
+                1,
+            )
 
         self.prior_dist = HierarchicalDistribution(
             global_dist, local_dist_fn, dim_global=2 * dim, dim_local=dim * n_l
@@ -136,9 +150,11 @@ class HierarchicalGaussianMixture(Task):
         for _ in range(dim):
             transforms_list.append(biject_to(constraints.positive))
 
-        # local params: Normal (unbounded) - use identity transform
+        # local params: TruncatedNormal (bounded) - use interval transform
         for _ in range(dim * n_l):
-            transforms_list.append(torch.distributions.transforms.identity_transform)
+            transforms_list.append(
+                biject_to(constraints.interval(-prior_bound, prior_bound))
+            )
 
         # Use custom wrapper to ensure Jacobian is properly summed
         self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
@@ -173,9 +189,8 @@ class HierarchicalGaussianMixture(Task):
             # Split parameters into global and local
             # Global: [:, 0:2*dim] (dim locs + dim scales)
             # Local: [:, 2*dim:] (dim*n_l parameters)
-            local_params = parameters[:, 2 * self.dim :].reshape(
-                num_samples, self.n_l, self.dim
-            )
+            local_params = parameters[:, 2 * self.dim :]  # noqa: E203
+            local_params = local_params.reshape(num_samples, self.n_l, self.dim)
 
             # Sample mixture indices for all contexts at once
             # Shape: (num_samples, n_l)
@@ -256,9 +271,8 @@ class HierarchicalGaussianMixture(Task):
         batch_size = parameters.shape[0]
 
         # Split parameters: local params [:, 2*dim:]
-        local_params = parameters[:, 2 * self.dim :].reshape(
-            batch_size, self.n_l, self.dim
-        )
+        local_params = parameters[:, 2 * self.dim :]  # noqa: E203
+        local_params = local_params.reshape(batch_size, self.n_l, self.dim)
 
         # Split data into n_l contexts (each dim observations)
         data_split = data.reshape(batch_size, self.n_l, self.dim)
@@ -276,10 +290,7 @@ class HierarchicalGaussianMixture(Task):
 
             component_log_probs = []
             for k in range(num_components):
-                loc = (
-                    self.simulator_params["mixture_locs_factor"][k]
-                    * context_params
-                )
+                loc = self.simulator_params["mixture_locs_factor"][k] * context_params
                 scale = self.simulator_params["mixture_scales"][k]
 
                 # Compute Normal log-likelihood
@@ -300,9 +311,7 @@ class HierarchicalGaussianMixture(Task):
         # Sum log-likelihoods across contexts (product of likelihoods)
         total_log_likelihood = torch.stack(log_likelihoods, dim=0).sum(dim=0)
 
-        return total_log_likelihood if log else torch.exp(
-            total_log_likelihood
-        )
+        return total_log_likelihood if log else torch.exp(total_log_likelihood)
 
     def _sample_reference_posterior(
         self,
