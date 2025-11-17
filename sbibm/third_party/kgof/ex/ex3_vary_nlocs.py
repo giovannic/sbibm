@@ -1,7 +1,8 @@
 """
 Simulation to examine the P(reject) as the number of test locations
-increases.  
+increases.
 """
+
 __author__ = "wittawat"
 
 import logging
@@ -61,7 +62,7 @@ def job_fssdq_med(p, data_source, tr, te, r, J, null_sim=None):
     with util.ContextTimer() as t:
         # median heuristic
         med = util.meddistance(X, subsample=1000)
-        k = kernel.KGauss(med ** 2)
+        k = kernel.KGauss(med**2)
         V = util.fit_gaussian_draw(X, J, seed=r + 1)
 
         fssd_med = gof.FSSD(p, k, V, null_sim=null_sim, alpha=alpha)

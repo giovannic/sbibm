@@ -61,9 +61,7 @@ class HierarchicalPosterior:
             # Forward pass through encoder
             from einops import rearrange
 
-            x_enc = self.model.deep_set.enc(
-                rearrange(x_batch, "b n d -> (b n) d")
-            )
+            x_enc = self.model.deep_set.enc(rearrange(x_batch, "b n d -> (b n) d"))
             x_enc = rearrange(
                 x_enc,
                 "(b n) d -> b n d",
@@ -80,9 +78,7 @@ class HierarchicalPosterior:
 
             # Global aggregation
             x_global = x.sum(-2) / mask.sum(1)[:, None]
-            x_global = torch.cat(
-                [x_global, mask.sum(1, keepdim=True)], -1
-            )
+            x_global = torch.cat([x_global, mask.sum(1, keepdim=True)], -1)
             self.global_context = self.model.deep_set.dec(x_global)
 
             # Local features
@@ -133,11 +129,9 @@ class HierarchicalPosterior:
                         dim=-1,
                     )
                     # Now sample 1 sample per global sample
-                    local_sample = (
-                        self.model.deep_set.flow_local.sample(
-                            1,
-                            context=local_ctx_expanded,
-                        )
+                    local_sample = self.model.deep_set.flow_local.sample(
+                        1,
+                        context=local_ctx_expanded,
                     )
                     # Shape is (num_samples, 1, dim) -> squeeze to
                     # (num_samples, dim)
@@ -146,11 +140,9 @@ class HierarchicalPosterior:
                 # Sample all local parameters independently
                 for i in range(num_events):
                     local_ctx = self.local_contexts[i : i + 1]  # noqa: E203
-                    local_sample = (
-                        self.model.deep_set.flow_local.sample(
-                            num_samples,
-                            context=local_ctx,
-                        )
+                    local_sample = self.model.deep_set.flow_local.sample(
+                        num_samples,
+                        context=local_ctx,
                     )
                     # Reshape from (1, num_samples, dim) to (num_samples, dim)
                     local_samples.append(local_sample.squeeze(0))

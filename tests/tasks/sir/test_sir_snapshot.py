@@ -40,9 +40,7 @@ def sir_snapshot():
         with open(SNAPSHOT_FILE, "r") as f:
             data = json.load(f)
         parameters = torch.tensor(data["parameters"], dtype=torch.float32)
-        trajectories = torch.tensor(
-            data["trajectories"], dtype=torch.float32
-        )
+        trajectories = torch.tensor(data["trajectories"], dtype=torch.float32)
     else:
         # Generate snapshot using current implementation with fixed seed
         pyro.util.set_rng_seed(123)
@@ -70,21 +68,20 @@ def sir_snapshot():
             )
 
     # Validate snapshot consistency and finiteness
-    assert parameters.shape == (5, 2), (
-        f"Expected parameters shape (5, 2), got {parameters.shape}"
-    )
-    assert trajectories.shape[0] == 5, (
-        f"Expected 5 trajectory samples, got {trajectories.shape[0]}"
-    )
-    assert trajectories.shape[1] == 3, (
-        f"Expected 3 state dims (S, I, R), got {trajectories.shape[1]}"
-    )
-    assert torch.isfinite(parameters).all(), (
-        "Snapshot parameters contain NaN or Inf"
-    )
-    assert torch.isfinite(trajectories).all(), (
-        "Snapshot trajectories contain NaN or Inf"
-    )
+    assert parameters.shape == (
+        5,
+        2,
+    ), f"Expected parameters shape (5, 2), got {parameters.shape}"
+    assert (
+        trajectories.shape[0] == 5
+    ), f"Expected 5 trajectory samples, got {trajectories.shape[0]}"
+    assert (
+        trajectories.shape[1] == 3
+    ), f"Expected 3 state dims (S, I, R), got {trajectories.shape[1]}"
+    assert torch.isfinite(parameters).all(), "Snapshot parameters contain NaN or Inf"
+    assert torch.isfinite(
+        trajectories
+    ).all(), "Snapshot trajectories contain NaN or Inf"
 
     return parameters, trajectories
 

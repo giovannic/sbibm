@@ -136,7 +136,11 @@ def fig_metric(
     chart = chart.configure_point(size=50).configure_line(size=1.5)
 
     if title is not None:
-        chart = chart.properties(title={"text": [title],}).configure_title(
+        chart = chart.properties(
+            title={
+                "text": [title],
+            }
+        ).configure_title(
             offset=10,
             orient="top",
             anchor="middle",

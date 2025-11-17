@@ -1,5 +1,4 @@
 import sbibm
-
 from sbibm.algorithms.pyro.mcmc import run
 
 

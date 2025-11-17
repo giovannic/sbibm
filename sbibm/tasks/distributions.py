@@ -236,7 +236,7 @@ class BlockwiseDistribution(torch.distributions.Distribution, TorchDistributionM
 
         for dist in self.distributions:
             dim = dist.event_shape[0]
-            block_value = value[..., offset : offset + dim]
+            block_value = value[..., offset:offset + dim]
             log_probs.append(dist.log_prob(block_value))
             offset += dim
 
@@ -304,49 +304,54 @@ class HierarchicalDistribution(
         event_shape = torch.Size([dim_global + dim_local])
         super().__init__(batch_shape, event_shape, validate_args=False)
 
-    def sample(self, sample_shape=torch.Size()):
+    def sample(self, sample_shape, n_local):
         """Sample from the hierarchical distribution.
 
-        First samples global parameters, then samples local parameters
-        conditioned on the global parameters.
+        First samples global parameters, then samples local
+        parameters conditioned on the global parameters.
 
         Args:
             sample_shape: Shape of samples to generate
+            n_local: Number of local dimensions to sample.
 
         Returns:
-            Samples with shape sample_shape + batch_shape + [dim_global +
-            dim_local]
+            Samples with shape sample_shape + batch_shape +
+            [dim_global + n_local]
         """
         # Sample global parameters
         global_params = self.global_dist.sample(sample_shape)
 
         # Sample local parameters conditioned on global
-        local_dist = self.local_dist_fn(global_params)
+        # Pass n_local to local_dist_fn
+        local_dist = self.local_dist_fn(global_params, n_local=n_local)
         local_params = local_dist.sample()
 
         # Concatenate global and local parameters
         return torch.cat([global_params, local_params], dim=-1)
 
-    def log_prob(self, value):
+    def log_prob(self, value, n_local):
         """Compute log probability of the joint distribution.
 
-        log p(global, local) = log p(global) + log p(local | global)
+        log p(global, local) = log p(global) + log p(local |
+        global)
 
         Args:
-            value: Parameter tensor with shape [..., dim_global + dim_local]
+            value: Parameter tensor with shape [..., dim_global +
+                n_local]
+            n_local: Number of local dimensions in value.
 
         Returns:
             Log probability with shape [...]
         """
         # Split value into global and local components
-        global_params = value[..., : self.dim_global]
-        local_params = value[..., self.dim_global :]
+        global_params = value[..., :self.dim_global]
+        local_params = value[..., self.dim_global:]
 
         # Compute log p(global)
         log_prob_global = self.global_dist.log_prob(global_params)
 
         # Compute log p(local | global)
-        local_dist = self.local_dist_fn(global_params)
+        local_dist = self.local_dist_fn(global_params, n_local=n_local)
         log_prob_local = local_dist.log_prob(local_params)
 
         # Return joint log probability

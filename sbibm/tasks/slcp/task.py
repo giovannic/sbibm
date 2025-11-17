@@ -92,10 +92,10 @@ class SLCP(Task):
             rho = torch.nn.Tanh()(parameters[:, [4]]).squeeze()
 
             S = torch.empty((num_samples, 2, 2))
-            S[:, 0, 0] = s1 ** 2
+            S[:, 0, 0] = s1**2
             S[:, 0, 1] = rho * s1 * s2
             S[:, 1, 0] = rho * s1 * s2
-            S[:, 1, 1] = s2 ** 2
+            S[:, 1, 1] = s2**2
 
             # Add eps to diagonal to ensure PSD
             eps = 0.000001

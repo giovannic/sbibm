@@ -1,5 +1,5 @@
 """
-Module containing the MMD two-sample test of Gretton et al., 2012 
+Module containing the MMD two-sample test of Gretton et al., 2012
 "A Kernel Two-Sample Test" disguised as goodness-of-fit tests. Require the
 ability to sample from the specified density. This module depends on an external
 package
@@ -167,7 +167,7 @@ class QuadMMDGofOpt(gof.GofTest):
                 # Assume a Gaussian kernel. Construct a list of
                 # kernels to try based on multiples of the median heuristic
                 med = util.meddistance(tr_tst_data.stack_xy(), 1000)
-                list_gwidth = np.hstack(((med ** 2) * (2.0 ** np.linspace(-4, 4, 10))))
+                list_gwidth = np.hstack(((med**2) * (2.0 ** np.linspace(-4, 4, 10))))
                 list_gwidth.sort()
                 candidate_kernels = [kernel.KGauss(gw2) for gw2 in list_gwidth]
 

@@ -174,8 +174,7 @@ def save_results(
 
     # Create output filename
     output_file = (
-        output_dir
-        / f"{task_name}_{algorithm}_"
+        output_dir / f"{task_name}_{algorithm}_"
         f"{results['num_simulations']}_"
         f"{results['num_observation']}.csv"
     )

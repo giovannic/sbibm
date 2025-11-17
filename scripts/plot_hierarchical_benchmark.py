@@ -48,8 +48,7 @@ def load_all_results(input_dir: Path) -> dict:
 
     if not csv_files:
         raise ValueError(
-            f"No CSV files found matching pattern '{pattern}' "
-            f"in {input_dir}"
+            f"No CSV files found matching pattern '{pattern}' " f"in {input_dir}"
         )
 
     log.info(f"Found {len(csv_files)} result files total")
@@ -70,13 +69,8 @@ def load_all_results(input_dir: Path) -> dict:
 
     # Concatenate all DataFrames per task
     for task_name in sorted(results.keys()):
-        results[task_name] = pd.concat(
-            results[task_name], ignore_index=True
-        )
-        log.info(
-            f"Loaded {len(results[task_name])} total runs for "
-            f"'{task_name}'"
-        )
+        results[task_name] = pd.concat(results[task_name], ignore_index=True)
+        log.info(f"Loaded {len(results[task_name])} total runs for " f"'{task_name}'")
 
     return results
 
@@ -168,9 +162,7 @@ def create_grid_plot(
                 )
 
                 # Compute 95% CI
-                grouped["ci"] = (
-                    1.96 * grouped["std"] / (grouped["count"] ** 0.5)
-                )
+                grouped["ci"] = 1.96 * grouped["std"] / (grouped["count"] ** 0.5)
 
                 # Plot line with error bars
                 ax.errorbar(
@@ -294,9 +286,7 @@ def main():
     # Validate output path
     output_path = Path(args.output_path)
     if output_path.suffix.lower() != ".png":
-        raise ValueError(
-            f"Output path must end with .png, got: {output_path.suffix}"
-        )
+        raise ValueError(f"Output path must end with .png, got: {output_path.suffix}")
 
     # Load all results
     results = load_all_results(input_dir=Path(args.input_dir))

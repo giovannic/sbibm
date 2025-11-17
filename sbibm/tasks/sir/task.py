@@ -2,14 +2,13 @@ import math
 from pathlib import Path
 from typing import Callable, List, Optional
 
+import diffrax
 import jax
 import jax.numpy as jnp
 import numpy
 import pyro
 import torch
 from pyro import distributions as pdist
-
-import diffrax
 
 import sbibm  # noqa -- needed for setting sysimage path
 from sbibm.tasks.simulator import Simulator
@@ -116,9 +115,7 @@ class SIR(Task):
 
         return torch.stack([dS, dI, dR])
 
-    def _sir_ode_func(
-        self, t: jnp.ndarray, u: jnp.ndarray, args
-    ) -> jnp.ndarray:
+    def _sir_ode_func(self, t: jnp.ndarray, u: jnp.ndarray, args) -> jnp.ndarray:
         """Vectorized SIR ODE function for batch solving.
 
         Args:
@@ -140,9 +137,7 @@ class SIR(Task):
 
         return jnp.stack([dS, dI, dR], axis=1)
 
-    def solve_ode_trajectories(
-        self, parameters: torch.Tensor
-    ) -> torch.Tensor:
+    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
         """Solve SIR ODE for batched parameters (deterministic).
 
         Args:
@@ -154,15 +149,11 @@ class SIR(Task):
             [S, I, R] populations over time
         """
         num_samples = parameters.shape[0]
-        t_save = torch.linspace(
-            0, self.days, int(self.days / self.saveat) + 1
-        )
+        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
 
         # Convert to JAX arrays
         params_jax = jnp.array(parameters.numpy())
-        u0_batch = jnp.tile(
-            jnp.array(self.u0.numpy()), (num_samples, 1)
-        )
+        u0_batch = jnp.tile(jnp.array(self.u0.numpy()), (num_samples, 1))
         t_save_jax = jnp.array(t_save.numpy())
 
         # Define ODE term
@@ -183,18 +174,14 @@ class SIR(Task):
 
         # Convert back to PyTorch
         trajectories_np = numpy.asarray(solution.ys).copy()
-        trajectories = torch.from_numpy(
-            trajectories_np
-        ).to(torch.float32)
+        trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
 
         # Permute from (num_timepoints, num_samples, 3) to
         # (num_samples, 3, num_timepoints)
         trajectories = trajectories.permute(1, 2, 0)
 
         # Validate output shape
-        expected_shape = torch.Size(
-            [num_samples, 3, int(self.dim_data_raw / 3)]
-        )
+        expected_shape = torch.Size([num_samples, 3, int(self.dim_data_raw / 3)])
         if trajectories.shape != expected_shape:
             trajectories = float("nan") * torch.ones(expected_shape)
 

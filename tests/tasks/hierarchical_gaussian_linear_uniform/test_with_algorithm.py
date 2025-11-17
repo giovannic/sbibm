@@ -50,8 +50,7 @@ def test_snpe_integration(automatic_transforms_enabled):
     # Verify samples shape
     expected_dim = 10 + n_l
     assert samples.shape == (n_samples, expected_dim), (
-        f"Expected samples shape ({n_samples}, {expected_dim}), "
-        f"got {samples.shape}"
+        f"Expected samples shape ({n_samples}, {expected_dim}), " f"got {samples.shape}"
     )
 
     # Verify no NaN values in samples
@@ -70,8 +69,6 @@ def test_snpe_integration(automatic_transforms_enabled):
     # Verify local parameters (noise scales) are positive
     # Local params are last n_l dimensions
     local_scales = samples[:, 10:]
-    assert torch.all(
-        local_scales >= 0
-    ), "Local noise scales should be positive"
+    assert torch.all(local_scales >= 0), "Local noise scales should be positive"
 
     log.info(f"SNPE integration test passed with {num_sims} simulations")

@@ -1,4 +1,4 @@
-"""Simulation to examine the P(reject) as the parameters for each problem are 
+"""Simulation to examine the P(reject) as the parameters for each problem are
 varied. What varies will depend on the problem."""
 
 __author__ = "wittawat"
@@ -62,7 +62,7 @@ def job_fssdJ1q_med(p, data_source, tr, te, r, J=1, null_sim=None):
     with util.ContextTimer() as t:
         # median heuristic
         med = util.meddistance(X, subsample=1000)
-        k = kernel.KGauss(med ** 2)
+        k = kernel.KGauss(med**2)
         V = util.fit_gaussian_draw(X, J, seed=r + 3)
 
         fssd_med = gof.FSSD(p, k, V, null_sim=null_sim, alpha=alpha)
@@ -362,7 +362,7 @@ def job_kstein_med(p, data_source, tr, te, r):
     with util.ContextTimer() as t:
         # median heuristic
         med = util.meddistance(X, subsample=1000)
-        k = kernel.KGauss(med ** 2)
+        k = kernel.KGauss(med**2)
 
         kstein = gof.KernelSteinTest(p, k, alpha=alpha, n_simulate=1000, seed=r)
         kstein_result = kstein.perform_test(data)
@@ -402,7 +402,7 @@ def job_lin_kstein_med(p, data_source, tr, te, r):
     with util.ContextTimer() as t:
         # median heuristic
         med = util.meddistance(X, subsample=1000)
-        k = kernel.KGauss(med ** 2)
+        k = kernel.KGauss(med**2)
 
         lin_kstein = gof.LinearKernelSteinTest(p, k, alpha=alpha, seed=r)
         lin_kstein_result = lin_kstein.perform_test(data)
@@ -431,7 +431,7 @@ def job_mmd_med(p, data_source, tr, te, r):
         medy = util.meddistance(Y, subsample=1000)
         medxy = util.meddistance(XY, subsample=1000)
         med_avg = (medx + medy + medxy) / 3.0
-        k = kernel.KGauss(med_avg ** 2)
+        k = kernel.KGauss(med_avg**2)
 
         mmd_test = mgof.QuadMMDGof(p, k, n_permute=400, alpha=alpha, seed=r)
         mmd_result = mmd_test.perform_test(data)
@@ -461,7 +461,7 @@ def job_mmd_opt(p, data_source, tr, te, r):
         # heuristic
         # list_gwidth = np.hstack( (np.linspace(20, 40, 10), (med**2)
         #    *(2.0**np.linspace(-2, 2, 20) ) ) )
-        list_gwidth = (med ** 2) * (2.0 ** np.linspace(-3, 3, 30))
+        list_gwidth = (med**2) * (2.0 ** np.linspace(-3, 3, 30))
         list_gwidth.sort()
         candidate_kernels = [kernel.KGauss(gw2) for gw2 in list_gwidth]
 

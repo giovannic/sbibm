@@ -1,6 +1,7 @@
 """
 Module containing data structures for representing datasets.
 """
+
 from __future__ import division, print_function
 
 from builtins import object, range
@@ -454,7 +455,7 @@ class DSISIPoissonLinear(DataSource):
         if np.abs(b) <= 1e-8:
             F_l = -np.log(1 - u)
         else:
-            F_l = np.sqrt(-2.0 / b * np.log(1 - u) + old_div(1.0, (b ** 2))) - old_div(
+            F_l = np.sqrt(-2.0 / b * np.log(1 - u) + old_div(1.0, (b**2))) - old_div(
                 1.0, b
             )
         return F_l
@@ -624,7 +625,7 @@ class DSISILogPoissonLinear(DataSource):
         if np.abs(b) <= 1e-8:
             F_l = -np.log(1 - u)
         else:
-            F_l = np.sqrt(-2.0 / b * np.log(1 - u) + old_div(1.0, (b ** 2))) - old_div(
+            F_l = np.sqrt(-2.0 / b * np.log(1 - u) + old_div(1.0, (b**2))) - old_div(
                 1.0, b
             )
         return F_l
@@ -662,7 +663,7 @@ class DSISIPoisson2D(DataSource):
             raise ValueError("Not intensity function found")
 
     def quadratic_intensity(self, X):
-        intensity = self.lamb_bar * np.sum(X ** 2, 1)
+        intensity = self.lamb_bar * np.sum(X**2, 1)
         return intensity
 
     def sine_intensity(self, X):
@@ -719,7 +720,7 @@ class DSISISigmoidPoisson2D(DataSource):
             raise ValueError("Not intensity function found")
 
     def quadratic_intensity(self, X):
-        intensity = self.lamb_bar * np.average(X ** 2, axis=1, weights=[self.a, 1])
+        intensity = self.lamb_bar * np.average(X**2, axis=1, weights=[self.a, 1])
         return intensity
 
     def cross_sine_intensity(self, X):
@@ -877,7 +878,7 @@ class DSGaussCosFreqs(DataSource):
             while from_ind < n:
                 # The proposal q is N(0, sigma2*I)
                 X = np.random.randn(block_size, d) * np.sqrt(sigma2)
-                q_un = np.exp(old_div(-np.sum(X ** 2, 1), (2.0 * sigma2)))
+                q_un = np.exp(old_div(-np.sum(X**2, 1), (2.0 * sigma2)))
                 # unnormalized density p
                 p_un = q_un * (1 + np.prod(np.cos(X * freqs), 1))
                 c = 2.0

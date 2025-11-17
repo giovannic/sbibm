@@ -1,6 +1,7 @@
 """
 Module containing many types of goodness-of-fit test methods.
 """
+
 from __future__ import division
 
 from builtins import object, range, str, zip
@@ -384,7 +385,7 @@ class FSSD(GofTest):
         Tau = np.reshape(Xi, [n, d * J])
         if use_unbiased:
             t1 = np.sum(np.mean(Tau, 0) ** 2) * (old_div(n, float(n - 1)))
-            t2 = old_div(np.sum(np.mean(Tau ** 2, 0)), float(n - 1))
+            t2 = old_div(np.sum(np.mean(Tau**2, 0)), float(n - 1))
             # stat is the mean
             stat = t1 - t2
         else:
@@ -396,7 +397,7 @@ class FSSD(GofTest):
         # compute the variance
         # mu: d*J vector
         mu = np.mean(Tau, 0)
-        variance = 4 * np.mean(np.dot(Tau, mu) ** 2) - 4 * np.sum(mu ** 2) ** 2
+        variance = 4 * np.mean(np.dot(Tau, mu) ** 2) - 4 * np.sum(mu**2) ** 2
         return stat, variance
 
     @staticmethod
@@ -605,7 +606,7 @@ class GaussFSSD(FSSD):
         # to automatically enforce the positivity.
         def obj(sqrt_gwidth, V):
             return -GaussFSSD.power_criterion(
-                p, dat, sqrt_gwidth ** 2, V, reg=reg, use_2terms=use_2terms
+                p, dat, sqrt_gwidth**2, V, reg=reg, use_2terms=use_2terms
             )
 
         flatten = lambda gwidth, V: np.hstack((gwidth, V.reshape(-1)))
@@ -670,7 +671,7 @@ class GaussFSSD(FSSD):
         opt_result["time_secs"] = timer.secs
         x_opt = opt_result["x"]
         sq_gw_opt, V_opt = unflatten(x_opt)
-        gw_opt = sq_gw_opt ** 2
+        gw_opt = sq_gw_opt**2
 
         assert util.is_real_num(gw_opt), "gw_opt is not real. Was %s" % str(gw_opt)
 
@@ -910,7 +911,7 @@ class IMQFSSD(FSSD):
         n, d = X.shape
 
         def obj(sqrt_neg_b, c, V):
-            b = -(sqrt_neg_b ** 2)
+            b = -(sqrt_neg_b**2)
             return -IMQFSSD.power_criterion(p, dat, b, c, V, reg=reg)
 
         flatten = lambda sqrt_neg_b, c, V: np.hstack((sqrt_neg_b, c, V.reshape(-1)))
@@ -976,7 +977,7 @@ class IMQFSSD(FSSD):
         opt_result["time_secs"] = timer.secs
         x_opt = opt_result["x"]
         sqrt_neg_b, c, V_opt = unflatten(x_opt)
-        b = -(sqrt_neg_b ** 2)
+        b = -(sqrt_neg_b**2)
         assert util.is_real_num(b), "b is not real. Was {}".format(b)
         assert b < 0
         assert util.is_real_num(c), "c is not real. Was {}".format(c)
@@ -1147,7 +1148,7 @@ class LinearKernelSteinTest(GofTest):
             # H: length-n vector
             _, H = self.compute_stat(dat, return_pointwise_stats=True)
             test_stat = np.sqrt(old_div(n, 2)) * np.mean(H)
-            stat_var = np.mean(H ** 2)
+            stat_var = np.mean(H**2)
             pvalue = stats.norm.sf(test_stat, loc=0, scale=np.sqrt(stat_var))
 
         results = {
@@ -1243,7 +1244,7 @@ class SteinWitness(object):
         # Process chunk by chunk.
         block_rows = util.constrain(50000 // (d * J), 10, 5000)
         avg_rows = []
-        for (f, t) in util.ChunkIterable(start=0, end=n, chunk_size=block_rows):
+        for f, t in util.ChunkIterable(start=0, end=n, chunk_size=block_rows):
             assert f < t
             Xblock = X[f:t, :]
             b = Xblock.shape[0]

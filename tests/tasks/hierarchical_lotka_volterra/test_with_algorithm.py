@@ -153,20 +153,18 @@ def test_snpe_samples_reasonable():
     # Check global parameters (dims 0-1: beta, gamma)
     global_params = samples[:, :2]
     # Beta (predation) should be around 0.028 (can vary widely)
-    assert (
-        global_params[:, 0] > 0.0
-    ).all(), "Beta (predation) should be positive"
+    assert (global_params[:, 0] > 0.0).all(), "Beta (predation) should be positive"
 
     # Gamma (predator death) should be around 0.5 (can vary)
     assert (
-        global_params[:, 1] > 0.
+        global_params[:, 1] > 0.0
     ).all(), "Gamma (predator death) should be positive"
 
     # Check local parameters (dims 2+: alpha_i, delta_i per site)
     local_params = samples[:, 2:]
     # All should be positive and bounded
     assert (
-        local_params > 0.
+        local_params > 0.0
     ).all(), f"Local params should be positive, got {local_params}"
 
     log.info(

@@ -89,29 +89,33 @@ class HierarchicalTwoMoons(Task):
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
-        def local_dist_fn(global_params):
+        def local_dist_fn(global_params, n_local):
             # global_params shape: [..., 4]
+            # n_local: number of local groups/contexts
             # Extract locs and scales
             locs = global_params[..., :2]  # [..., 2]
             scales = global_params[..., 2:4]  # [..., 2]
 
-            # Create distribution for all local params (2*n_l dims)
-            # Each local param (2D) is TruncatedNormal(loc, scale, -1, 1)
-            # Replicate locs and scales for n_l contexts
+            # Create distribution for n_local groups
+            # (2 * n_local dimensions)
+            # Each local context (2D) is TruncatedNormal(loc,
+            # scale, -1, 1)
+            # Replicate locs and scales for n_local contexts
             batch_shape = global_params.shape[:-1]
             locs_expanded = (
                 locs.unsqueeze(-2)
-                .expand(list(batch_shape) + [n_l, 2])
-                .reshape(list(batch_shape) + [2 * n_l])
+                .expand(list(batch_shape) + [n_local, 2])
+                .reshape(list(batch_shape) + [2 * n_local])
             )
             scales_expanded = (
                 scales.unsqueeze(-2)
-                .expand(list(batch_shape) + [n_l, 2])
-                .reshape(list(batch_shape) + [2 * n_l])
+                .expand(list(batch_shape) + [n_local, 2])
+                .reshape(list(batch_shape) + [2 * n_local])
             )
 
             return pdist.Independent(
-                TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0), 1
+                TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0),
+                1,
             )
 
         self.prior_dist = HierarchicalDistribution(
@@ -167,12 +171,16 @@ class HierarchicalTwoMoons(Task):
 
             # Split parameters into global and local
             # Global: [:, 0:4] (2 locs + 2 scales)
-            # Local: [:, 4:] (2*n_l parameters)
-            local_params = parameters[:, 4:].reshape(num_samples, self.n_l, 2)
+            # Local: [:, 4:] (2*n local parameters where n is
+            # inferred from shape)
+            n_local_dims = parameters.shape[1] - 4
+            n_local_groups = n_local_dims // 2
+            local_params = parameters[:, 4:].reshape(num_samples, n_local_groups, 2)
 
-            # For each local context, run the two_moons simulator
+            # For each local context, run the two_moons
+            # simulator
             observations = []
-            for i in range(self.n_l):
+            for i in range(n_local_groups):
                 # Extract local parameters for context i
                 context_params = local_params[:, i, :]  # (num_samples, 2)
 
@@ -216,9 +224,7 @@ class HierarchicalTwoMoons(Task):
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
 
-    def _get_transforms(
-        self, automatic_transforms_enabled: bool = True, **kwargs: Any
-    ):
+    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
         return {"parameters": self.composite_transform.inv}
 
     def _likelihood(

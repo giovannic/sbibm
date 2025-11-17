@@ -58,20 +58,24 @@ def generate_hierarchical_two_moons_labels(
     labels = []
 
     # Global: 4 pooling params (2 locs, 2 scales)
-    labels.extend([
-        f"global_loc{numbers_unicode[0]}",
-        f"global_loc{numbers_unicode[1]}",
-        f"global_scale{numbers_unicode[0]}",
-        f"global_scale{numbers_unicode[1]}",
-    ])
+    labels.extend(
+        [
+            f"global_loc{numbers_unicode[0]}",
+            f"global_loc{numbers_unicode[1]}",
+            f"global_scale{numbers_unicode[0]}",
+            f"global_scale{numbers_unicode[1]}",
+        ]
+    )
 
     # Local: 2 params per context
     num_local_to_show = min(max_local_contexts, n_l)
     for ctx in range(num_local_to_show):
-        labels.extend([
-            f"local{numbers_unicode[ctx]}_θ{numbers_unicode[0]}",
-            f"local{numbers_unicode[ctx]}_θ{numbers_unicode[1]}",
-        ])
+        labels.extend(
+            [
+                f"local{numbers_unicode[ctx]}_θ{numbers_unicode[0]}",
+                f"local{numbers_unicode[ctx]}_θ{numbers_unicode[1]}",
+            ]
+        )
 
     return labels
 
@@ -132,8 +136,7 @@ def visualize_posterior(
         from sbibm.algorithms.sbi.snre import run as run_algorithm
     else:
         raise ValueError(
-            f"Unknown algorithm: {algorithm}. "
-            f"Choose from: snpe, snle, snre"
+            f"Unknown algorithm: {algorithm}. " f"Choose from: snpe, snle, snre"
         )
 
     # Run algorithm

@@ -61,7 +61,9 @@ def test_snpe_integration(automatic_transforms_enabled):
 
     # Verify global parameters (mean structure) are reasonable
     global_params = samples[:, :10]
-    assert torch.all(torch.abs(global_params) < 10), "Global parameters should be reasonable"
+    assert torch.all(
+        torch.abs(global_params) < 10
+    ), "Global parameters should be reasonable"
 
     # Verify local parameters (noise scales) are positive
     local_scales = samples[:, 10:]

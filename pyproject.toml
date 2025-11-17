@@ -60,6 +60,7 @@ dev = [
     "pytest-benchmark",
     "pytest-plt",
     "typeguard",
+    "tfmpe @ https://github.com/giovannic/tfmpe.git@feat/bottom_up"
 ]
 
 [project.urls]

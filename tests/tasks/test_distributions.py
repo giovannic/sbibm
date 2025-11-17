@@ -232,10 +232,12 @@ def test_truncated_normal_bijection_respects_constraints():
     samples_back = transform.inv(samples_unconstrained)
 
     # Samples should still be within bounds after round-trip
-    assert (samples_back >= low).all(), \
-        f"Samples below bound: min={samples_back.min()}, low={low}"
-    assert (samples_back <= high).all(), \
-        f"Samples above bound: max={samples_back.max()}, high={high}"
+    assert (
+        samples_back >= low
+    ).all(), f"Samples below bound: min={samples_back.min()}, low={low}"
+    assert (
+        samples_back <= high
+    ).all(), f"Samples above bound: max={samples_back.max()}, high={high}"
 
     # Should be close to original (within numerical precision)
     assert torch.allclose(samples_constrained, samples_back, atol=1e-5)

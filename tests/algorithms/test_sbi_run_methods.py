@@ -1,7 +1,7 @@
 import pytest
 
 import sbibm
-from sbibm.algorithms.sbi import mcabc, smcabc, snle, snpe, snre, sl
+from sbibm.algorithms.sbi import mcabc, sl, smcabc, snle, snpe, snre
 
 
 # a fast test

@@ -4,6 +4,7 @@ This module tests the end-to-end integration of hierarchical_two_moons with:
 - SNPE algorithm from sbi
 - Reference-free metrics (reverse_kl and lc2st)
 """
+
 import logging
 
 import pytest
@@ -70,8 +71,7 @@ def test_both_metrics_on_same_posterior(automatic_transforms_enabled):
     # Verify samples shape
     expected_dim = 4 + 2 * n_l
     assert samples.shape == (n_samples, expected_dim), (
-        f"Expected samples shape ({n_samples}, {expected_dim}), "
-        f"got {samples.shape}"
+        f"Expected samples shape ({n_samples}, {expected_dim}), " f"got {samples.shape}"
     )
 
     # Verify no NaN values in samples
@@ -82,9 +82,7 @@ def test_both_metrics_on_same_posterior(automatic_transforms_enabled):
 
     # Verify posterior has required methods
     assert hasattr(posterior, "sample"), "Posterior should have sample method"
-    assert hasattr(posterior, "log_prob"), (
-        "Posterior should have log_prob method"
-    )
+    assert hasattr(posterior, "log_prob"), "Posterior should have log_prob method"
 
     # Test that we can sample from posterior
     new_samples = posterior.sample((50,))
@@ -123,21 +121,21 @@ def test_both_metrics_on_same_posterior(automatic_transforms_enabled):
 
     # Verify LC2ST result is a dictionary
     assert isinstance(lc2st_result, dict), "LC2ST should return a dictionary"
-    assert "test_statistic" in lc2st_result, (
-        "Result should contain 'test_statistic' key"
-    )
+    assert (
+        "test_statistic" in lc2st_result
+    ), "Result should contain 'test_statistic' key"
 
     # Verify LC2ST values are finite
     for key, value in lc2st_result.items():
         if isinstance(value, (torch.Tensor, float)):
             if isinstance(value, torch.Tensor):
-                assert torch.isfinite(value).all(), (
-                    f"LC2ST result[{key}] contains non-finite values"
-                )
+                assert torch.isfinite(
+                    value
+                ).all(), f"LC2ST result[{key}] contains non-finite values"
             else:
-                assert not (value != value or abs(value) == float("inf")), (
-                    f"LC2ST result[{key}] is not finite"
-                )
+                assert not (
+                    value != value or abs(value) == float("inf")
+                ), f"LC2ST result[{key}] is not finite"
 
     log.info(
         f"Complete reference-free evaluation "
@@ -176,22 +174,27 @@ def test_snpe_samples_in_valid_range():
 
     # Check global loc parameters (dims 0-1, should be in [-1, 1])
     global_loc = samples[:, :2]
-    assert (global_loc >= -1.0).all(), \
-        f"Global loc below -1: min={global_loc.min().item()}"
-    assert (global_loc <= 1.0).all(), \
-        f"Global loc above 1: max={global_loc.max().item()}"
+    assert (
+        global_loc >= -1.0
+    ).all(), f"Global loc below -1: min={global_loc.min().item()}"
+    assert (
+        global_loc <= 1.0
+    ).all(), f"Global loc above 1: max={global_loc.max().item()}"
 
     # Check global scale parameters (dims 2-3, should be positive)
     global_scale = samples[:, 2:4]
-    assert (global_scale >= 0.0).all(), \
-        f"Global scale negative: min={global_scale.min().item()}"
+    assert (
+        global_scale >= 0.0
+    ).all(), f"Global scale negative: min={global_scale.min().item()}"
 
     # Check local parameters (dims 4+, should be in [-1, 1])
     local_params = samples[:, 4:]
-    assert (local_params >= -1.0).all(), \
-        f"Local params below -1: min={local_params.min().item()}"
-    assert (local_params <= 1.0).all(), \
-        f"Local params above 1: max={local_params.max().item()}"
+    assert (
+        local_params >= -1.0
+    ).all(), f"Local params below -1: min={local_params.min().item()}"
+    assert (
+        local_params <= 1.0
+    ).all(), f"Local params above 1: max={local_params.max().item()}"
 
     log.info(
         f"Sample ranges (transforms={'enabled' if automatic_transforms_enabled else 'disabled'}):"
@@ -199,6 +202,7 @@ def test_snpe_samples_in_valid_range():
         f"\n  Global scale: [{global_scale.min().item():.3f}, {global_scale.max().item():.3f}]"
         f"\n  Local params: [{local_params.min().item():.3f}, {local_params.max().item():.3f}]"
     )
+
 
 def test_wrapped_prior_domain_codomain():
     """Test that wrapped prior produces unconstrained samples.
@@ -212,9 +216,7 @@ def test_wrapped_prior_domain_codomain():
 
     # Get unwrapped and wrapped priors
     prior_unwrapped = task.get_prior_dist()
-    transforms = task._get_transforms(automatic_transforms_enabled=True)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled=True)["parameters"]
     prior_wrapped = wrap_prior_dist(prior_unwrapped, transforms)
 
     # Sample from wrapped prior (should be unconstrained)
@@ -240,8 +242,7 @@ def test_wrapped_prior_domain_codomain():
     # Global loc (dims 0-1): [-1, 1]
     global_loc = samples_constrained[:, :2]
     assert (global_loc >= -1.0).all(), (
-        f"Global loc should be >= -1, "
-        f"got min={global_loc.min().item()}"
+        f"Global loc should be >= -1, " f"got min={global_loc.min().item()}"
     )
     assert (global_loc <= 1.0).all(), (
         f"Global loc should be <= 1, " f"got max={global_loc.max().item()}"
@@ -250,19 +251,16 @@ def test_wrapped_prior_domain_codomain():
     # Global scale (dims 2-3): > 0
     global_scale = samples_constrained[:, 2:4]
     assert (global_scale > 0.0).all(), (
-        f"Global scale should be > 0, "
-        f"got min={global_scale.min().item()}"
+        f"Global scale should be > 0, " f"got min={global_scale.min().item()}"
     )
 
     # Local params (dims 4+): [-1, 1]
     local_params = samples_constrained[:, 4:]
     assert (local_params >= -1.0).all(), (
-        f"Local params should be >= -1, "
-        f"got min={local_params.min().item()}"
+        f"Local params should be >= -1, " f"got min={local_params.min().item()}"
     )
     assert (local_params <= 1.0).all(), (
-        f"Local params should be <= 1, "
-        f"got max={local_params.max().item()}"
+        f"Local params should be <= 1, " f"got max={local_params.max().item()}"
     )
 
 
@@ -277,9 +275,7 @@ def test_wrapped_prior_domain_codomain_with_gaussian():
     task = HierarchicalTwoMoons(n_l=n_l)
 
     # Get unwrapped and wrapped priors
-    transforms = task._get_transforms(automatic_transforms_enabled=True)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled=True)["parameters"]
 
     # Sample from wrapped prior (should be unconstrained)
     num_samples = 1000
@@ -307,8 +303,7 @@ def test_wrapped_prior_domain_codomain_with_gaussian():
     # Global loc (dims 0-1): [-1, 1]
     global_loc = samples_constrained[:, :2]
     assert (global_loc >= -1.0).all(), (
-        f"Global loc should be >= -1, "
-        f"got min={global_loc.min().item()}"
+        f"Global loc should be >= -1, " f"got min={global_loc.min().item()}"
     )
     assert (global_loc <= 1.0).all(), (
         f"Global loc should be <= 1, " f"got max={global_loc.max().item()}"
@@ -317,19 +312,16 @@ def test_wrapped_prior_domain_codomain_with_gaussian():
     # Global scale (dims 2-3): > 0
     global_scale = samples_constrained[:, 2:4]
     assert (global_scale > 0.0).all(), (
-        f"Global scale should be > 0, "
-        f"got min={global_scale.min().item()}"
+        f"Global scale should be > 0, " f"got min={global_scale.min().item()}"
     )
 
     # Local params (dims 4+): [-1, 1]
     local_params = samples_constrained[:, 4:]
     assert (local_params >= -1.0).all(), (
-        f"Local params should be >= -1, "
-        f"got min={local_params.min().item()}"
+        f"Local params should be >= -1, " f"got min={local_params.min().item()}"
     )
     assert (local_params <= 1.0).all(), (
-        f"Local params should be <= 1, "
-        f"got max={local_params.max().item()}"
+        f"Local params should be <= 1, " f"got max={local_params.max().item()}"
     )
 
 
@@ -345,9 +337,7 @@ def test_wrapped_prior_log_prob():
 
     # Get unwrapped and wrapped priors
     prior_unwrapped = task.get_prior_dist()
-    transforms = task._get_transforms(automatic_transforms_enabled=True)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled=True)["parameters"]
     prior_wrapped = wrap_prior_dist(prior_unwrapped, transforms)
 
     # Sample from unwrapped prior (constrained space)
@@ -373,36 +363,29 @@ def test_wrapped_prior_log_prob():
 
     # Check shapes
     assert log_prob_unwrapped.shape == (num_samples,), (
-        f"Expected log_prob shape ({num_samples},), "
-        f"got {log_prob_unwrapped.shape}"
+        f"Expected log_prob shape ({num_samples},), " f"got {log_prob_unwrapped.shape}"
     )
     assert log_prob_wrapped.shape == (num_samples,), (
-        f"Expected log_prob shape ({num_samples},), "
-        f"got {log_prob_wrapped.shape}"
+        f"Expected log_prob shape ({num_samples},), " f"got {log_prob_wrapped.shape}"
     )
     assert log_abs_det_jac.shape == (num_samples,), (
-        f"Expected Jacobian shape ({num_samples},), "
-        f"got {log_abs_det_jac.shape}"
+        f"Expected Jacobian shape ({num_samples},), " f"got {log_abs_det_jac.shape}"
     )
 
     # Check all values are finite
-    assert torch.isfinite(log_prob_unwrapped).all(), (
-        "Unwrapped log_prob contains non-finite values"
-    )
-    assert torch.isfinite(log_prob_wrapped).all(), (
-        "Wrapped log_prob contains non-finite values"
-    )
-    assert torch.isfinite(log_abs_det_jac).all(), (
-        "Jacobian contains non-finite values"
-    )
+    assert torch.isfinite(
+        log_prob_unwrapped
+    ).all(), "Unwrapped log_prob contains non-finite values"
+    assert torch.isfinite(
+        log_prob_wrapped
+    ).all(), "Wrapped log_prob contains non-finite values"
+    assert torch.isfinite(log_abs_det_jac).all(), "Jacobian contains non-finite values"
 
     # Check 1: Change-of-variables formula
     # log p_Y(y) = log p_X(x) - log|det J|
     # where y = transform(x) (constrained -> unconstrained)
     expected_log_prob = log_prob_unwrapped - log_abs_det_jac
-    assert torch.allclose(
-        log_prob_wrapped, expected_log_prob, atol=1e-2
-    ), (
+    assert torch.allclose(log_prob_wrapped, expected_log_prob, atol=1e-2), (
         f"Change-of-variables formula failed: "
         f"max diff = {(log_prob_wrapped - expected_log_prob).abs().max()}"
     )
@@ -411,9 +394,7 @@ def test_wrapped_prior_log_prob():
     # to unwrapped (accounting for Jacobian)
     # This verifies: wrapped.log_prob(y) + log|det J| ≈ unwrapped.log_prob(x)
     recovered_log_prob = log_prob_wrapped + log_abs_det_jac
-    assert torch.allclose(
-        recovered_log_prob, log_prob_unwrapped, atol=1e-5
-    ), (
+    assert torch.allclose(recovered_log_prob, log_prob_unwrapped, atol=1e-5), (
         f"Recovered log prob doesn't match unwrapped: "
         f"max diff = {(recovered_log_prob - log_prob_unwrapped).abs().max()}"
     )
@@ -430,9 +411,7 @@ def test_wrapped_simulator_domain_codomain():
 
     # Get wrapped prior and simulator
     prior_unwrapped = task.get_prior_dist()
-    transforms = task._get_transforms(automatic_transforms_enabled=True)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled=True)["parameters"]
     prior_wrapped = wrap_prior_dist(prior_unwrapped, transforms)
     simulator_unwrapped = task.get_simulator()
     simulator_wrapped = wrap_simulator_fn(simulator_unwrapped, transforms)
@@ -451,12 +430,8 @@ def test_wrapped_simulator_domain_codomain():
     )
 
     # Check no NaNs or Infs
-    assert not torch.isnan(observations).any(), (
-        "Observations contain NaN values"
-    )
-    assert torch.isfinite(observations).all(), (
-        "Observations contain non-finite values"
-    )
+    assert not torch.isnan(observations).any(), "Observations contain NaN values"
+    assert torch.isfinite(observations).all(), "Observations contain non-finite values"
 
     # Verify simulator wrapper internally transforms to constrained space
     # by checking that results are similar to unwrapped simulator with
@@ -481,9 +456,7 @@ def test_wrapped_posterior_domain_codomain():
     task = HierarchicalTwoMoons(n_l=n_l)
 
     # Get transforms
-    transforms = task._get_transforms(automatic_transforms_enabled=True)[
-        "parameters"
-    ]
+    transforms = task._get_transforms(automatic_transforms_enabled=True)["parameters"]
 
     # Create mock posterior in unconstrained space
     # (simulating what density estimator returns)
@@ -496,9 +469,7 @@ def test_wrapped_posterior_domain_codomain():
     )
 
     # Wrap posterior (should now operate in constrained space)
-    posterior_wrapped = wrap_posterior(
-        mock_posterior_unconstrained, transforms
-    )
+    posterior_wrapped = wrap_posterior(mock_posterior_unconstrained, transforms)
 
     # Test 1: sample() returns constrained samples
     num_samples = 1000
@@ -510,41 +481,34 @@ def test_wrapped_posterior_domain_codomain():
     # Global loc (dims 0-1): [-1, 1]
     global_loc = samples[:, :2]
     assert (global_loc >= -1.0).all(), (
-        f"Global loc should be >= -1, "
-        f"got min={global_loc.min().item()}"
+        f"Global loc should be >= -1, " f"got min={global_loc.min().item()}"
     )
     assert (global_loc <= 1.0).all(), (
-        f"Global loc should be <= 1, "
-        f"got max={global_loc.max().item()}"
+        f"Global loc should be <= 1, " f"got max={global_loc.max().item()}"
     )
 
     # Global scale (dims 2-3): > 0
     global_scale = samples[:, 2:4]
     assert (global_scale > 0.0).all(), (
-        f"Global scale should be > 0, "
-        f"got min={global_scale.min().item()}"
+        f"Global scale should be > 0, " f"got min={global_scale.min().item()}"
     )
 
     # Local params (dims 4+): [-1, 1]
     local_params = samples[:, 4:]
     assert (local_params >= -1.0).all(), (
-        f"Local params should be >= -1, "
-        f"got min={local_params.min().item()}"
+        f"Local params should be >= -1, " f"got min={local_params.min().item()}"
     )
     assert (local_params <= 1.0).all(), (
-        f"Local params should be <= 1, "
-        f"got max={local_params.max().item()}"
+        f"Local params should be <= 1, " f"got max={local_params.max().item()}"
     )
 
     # Test 2: log_prob() accepts constrained samples
     log_probs = posterior_wrapped.log_prob(samples[:10])
 
-    assert log_probs.shape == (10,), (
-        f"Expected log_probs shape (10,), got {log_probs.shape}"
-    )
-    assert torch.isfinite(log_probs).all(), (
-        "log_probs should be finite"
-    )
+    assert log_probs.shape == (
+        10,
+    ), f"Expected log_probs shape (10,), got {log_probs.shape}"
+    assert torch.isfinite(log_probs).all(), "log_probs should be finite"
 
 
 def test_snpe_two_rounds():
@@ -573,8 +537,7 @@ def test_snpe_two_rounds():
     # Verify samples shape
     expected_dim = 4 + 2 * n_l
     assert samples.shape == (n_samples, expected_dim), (
-        f"Expected samples shape ({n_samples}, {expected_dim}), "
-        f"got {samples.shape}"
+        f"Expected samples shape ({n_samples}, {expected_dim}), " f"got {samples.shape}"
     )
 
     # Verify no NaN values in samples
@@ -585,9 +548,7 @@ def test_snpe_two_rounds():
 
     # Verify posterior has required methods
     assert hasattr(posterior, "sample"), "Posterior should have sample method"
-    assert hasattr(
-        posterior, "log_prob"
-    ), "Posterior should have log_prob method"
+    assert hasattr(posterior, "log_prob"), "Posterior should have log_prob method"
 
     # Test that we can sample from posterior
     new_samples = posterior.sample((50,))
@@ -602,27 +563,27 @@ def test_snpe_two_rounds():
     # Verify samples respect parameter constraints
     # Global loc (dims 0-1): [-1, 1]
     global_loc = samples[:, :2]
-    assert (global_loc >= -1.0).all(), (
-        f"Global loc below -1: min={global_loc.min().item()}"
-    )
-    assert (global_loc <= 1.0).all(), (
-        f"Global loc above 1: max={global_loc.max().item()}"
-    )
+    assert (
+        global_loc >= -1.0
+    ).all(), f"Global loc below -1: min={global_loc.min().item()}"
+    assert (
+        global_loc <= 1.0
+    ).all(), f"Global loc above 1: max={global_loc.max().item()}"
 
     # Global scale (dims 2-3): > 0
     global_scale = samples[:, 2:4]
-    assert (global_scale >= 0.0).all(), (
-        f"Global scale negative: min={global_scale.min().item()}"
-    )
+    assert (
+        global_scale >= 0.0
+    ).all(), f"Global scale negative: min={global_scale.min().item()}"
 
     # Local params (dims 4+): [-1, 1]
     local_params = samples[:, 4:]
-    assert (local_params >= -1.0).all(), (
-        f"Local params below -1: min={local_params.min().item()}"
-    )
-    assert (local_params <= 1.0).all(), (
-        f"Local params above 1: max={local_params.max().item()}"
-    )
+    assert (
+        local_params >= -1.0
+    ).all(), f"Local params below -1: min={local_params.min().item()}"
+    assert (
+        local_params <= 1.0
+    ).all(), f"Local params above 1: max={local_params.max().item()}"
 
     log.info(
         f"Two-round SNPE completed successfully:"

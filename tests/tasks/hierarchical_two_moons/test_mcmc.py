@@ -38,6 +38,7 @@ def test_mcmc_sampling_basic(n_l):
     # Check scale parameters are positive (dims 2-3)
     assert (samples[:, 2:4] > 0).all(), "Scale parameters should be positive"
 
+
 def test_mcmc_sampling_multiple_chains():
     """Test that MCMC sampling runs and returns valid samples."""
     n_l = 3
@@ -69,6 +70,7 @@ def test_mcmc_sampling_multiple_chains():
 
     # Check scale parameters are positive (dims 2-3)
     assert (samples[:, 2:4] > 0).all(), "Scale parameters should be positive"
+
 
 def test_potential_function():
     """Test that potential function evaluates correctly at true parameters."""

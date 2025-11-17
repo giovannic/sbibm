@@ -52,7 +52,7 @@ def mmd(
         statistic = tp_mmd2_unbiased(K)
 
     elif implementation == "tp_djolonga":
-        alpha = 1 / (2 * sigma_tensor ** 2)
+        alpha = 1 / (2 * sigma_tensor**2)
         test = tp_MMDStatistic(n_1, n_2)
         statistic = test(X, Y, [alpha])
 
