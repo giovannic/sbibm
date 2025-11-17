@@ -97,7 +97,6 @@ class HierarchicalTwoMoons(Task):
             scales = global_params[..., 2:4]  # [..., 2]
 
             # Create distribution for n_local groups
-            # (2 * n_local dimensions)
             # Each local context (2D) is TruncatedNormal(loc,
             # scale, -1, 1)
             # Replicate locs and scales for n_local contexts
@@ -105,21 +104,23 @@ class HierarchicalTwoMoons(Task):
             locs_expanded = (
                 locs.unsqueeze(-2)
                 .expand(list(batch_shape) + [n_local, 2])
-                .reshape(list(batch_shape) + [2 * n_local])
             )
             scales_expanded = (
                 scales.unsqueeze(-2)
                 .expand(list(batch_shape) + [n_local, 2])
-                .reshape(list(batch_shape) + [2 * n_local])
             )
 
             return pdist.Independent(
                 TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0),
-                1,
+                2,
             )
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=4, dim_local=2 * n_l
+            global_dist,
+            local_dist_fn,
+            dim_global=4,
+            dim_local=2 * n_l,
+            default_n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 

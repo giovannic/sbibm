@@ -282,54 +282,81 @@ class HierarchicalDistribution(
     def __init__(
         self,
         global_dist: torch.distributions.Distribution,
-        local_dist_fn: Callable[[torch.Tensor], torch.distributions.Distribution],
+        local_dist_fn: Callable[[torch.Tensor, int], torch.distributions.Distribution],
         dim_global: int,
         dim_local: int,
+        default_n_local: int,
     ):
         """Initialize hierarchical distribution.
 
         Args:
             global_dist: Distribution over global parameters
-            local_dist_fn: Function taking global params, returning
-                distribution over local params
+            local_dist_fn: Function taking global params and n_local,
+                returning distribution over local params
             dim_global: Dimensionality of global parameters
-            dim_local: Dimensionality of local parameters
+            dim_local: Dimensionality of local parameters when sampled
+                with default n_local
+            default_n_local: Default number of local groups to use for
+                sample() when n_local is not specified
         """
         self.global_dist = global_dist
         self.local_dist_fn = local_dist_fn
         self.dim_global = dim_global
         self.dim_local = dim_local
+        self.default_n_local = default_n_local
 
         batch_shape = global_dist.batch_shape
         event_shape = torch.Size([dim_global + dim_local])
         super().__init__(batch_shape, event_shape, validate_args=False)
 
-    def sample(self, sample_shape, n_local):
-        """Sample from the hierarchical distribution.
+    def sample_n_local(
+        self, n_local, sample_shape=torch.Size()
+    ):
+        """Sample from the hierarchical distribution with variable local
+        dimensions.
 
         First samples global parameters, then samples local
-        parameters conditioned on the global parameters.
+        parameters conditioned on the global parameters, where the
+        number of local groups is determined by n_local.
 
         Args:
-            sample_shape: Shape of samples to generate
-            n_local: Number of local dimensions to sample.
+            n_local: Number of local groups to sample
+            sample_shape: Shape of samples to generate (default: empty)
 
         Returns:
             Samples with shape sample_shape + batch_shape +
-            [dim_global + n_local]
+            [dim_global + local_event_dim]
+            where local_event_dim depends on the local_dist_fn output
         """
         # Sample global parameters
         global_params = self.global_dist.sample(sample_shape)
 
         # Sample local parameters conditioned on global
         # Pass n_local to local_dist_fn
-        local_dist = self.local_dist_fn(global_params, n_local=n_local)
+        local_dist = self.local_dist_fn(global_params, n_local)
         local_params = local_dist.sample()
 
         # Concatenate global and local parameters
         return torch.cat([global_params, local_params], dim=-1)
 
-    def log_prob(self, value, n_local):
+    def sample(self, sample_shape=torch.Size()):
+        """Sample from the hierarchical distribution with default n_local.
+
+        First samples global parameters, then samples local
+        parameters conditioned on the global parameters, using the
+        default n_local value specified at initialization.
+
+        Args:
+            sample_shape: Shape of samples to generate (default: empty)
+
+        Returns:
+            Samples with shape sample_shape + batch_shape +
+            [dim_global + dim_local]
+        """
+        # Use default_n_local for standard sampling interface
+        return self.sample_n_local(self.default_n_local, sample_shape)
+
+    def log_prob(self, value):
         """Compute log probability of the joint distribution.
 
         log p(global, local) = log p(global) + log p(local |
@@ -337,8 +364,7 @@ class HierarchicalDistribution(
 
         Args:
             value: Parameter tensor with shape [..., dim_global +
-                n_local]
-            n_local: Number of local dimensions in value.
+                dim_local]
 
         Returns:
             Log probability with shape [...]
@@ -351,7 +377,9 @@ class HierarchicalDistribution(
         log_prob_global = self.global_dist.log_prob(global_params)
 
         # Compute log p(local | global)
-        local_dist = self.local_dist_fn(global_params, n_local=n_local)
+        local_dist = self.local_dist_fn(
+            global_params, self.default_n_local
+        )
         log_prob_local = local_dist.log_prob(local_params)
 
         # Return joint log probability
