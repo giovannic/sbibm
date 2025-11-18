@@ -1,7 +1,7 @@
 """TFMPE bottom-up algorithm for hierarchical inference on SBIBM tasks."""
 
 import time
-from typing import Dict, Tuple
+from typing import List, Dict, Tuple
 
 import diffrax
 import jax
@@ -9,39 +9,23 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import torch
+from math import prod
 from flax import nnx
 
 from sbibm.tasks.distributions import BlockwiseDistribution
+from sbibm.tasks import Task
+from sbibm.algorithms.sbi.utils import (
+    wrap_posterior,
+    wrap_prior_dist,
+    wrap_simulator_fn,
+)
 from tfmpe.estimators.tfmpe import TFMPE, NormalDistribution
 from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up
 from tfmpe.nn.transformer import Transformer, TransformerConfig
 from tfmpe.preprocessing.tokens import Tokens
 from tfmpe.preprocessing.utils import Independence, Labeller
 
-
-def _wrap_prior_dist(prior_dist, transforms):
-    """Wrap prior distribution with transforms."""
-    return TransformedDistribution(prior_dist, transforms)
-
-
-def _wrap_simulator_fn(simulator_fn, transforms):
-    """Wrap simulator to apply transforms to parameters."""
-
-    class SimulatorWrapper:
-        def __init__(self, simulator_fn, transforms):
-            self.simulator_fn = simulator_fn
-            self.transforms = transforms
-
-        def __call__(self, parameters):
-            # Apply inverse transform to move from
-            # unconstrained to constrained space
-            constrained_params = self.transforms.inv(parameters)
-            return self.simulator_fn(constrained_params)
-
-    return SimulatorWrapper(simulator_fn, transforms)
-
-
-def _get_blockwise_components(dist):
+def _get_blockwise_components(dist) -> List[Tuple[int, int]]:
     """Get component slices from a distribution.
 
     If dist is BlockwiseDistribution, returns list of (offset,
@@ -55,17 +39,38 @@ def _get_blockwise_components(dist):
         components = []
         offset = 0
         for comp in dist.distributions:
-            event_dim = comp.event_shape[0]
+            event_dim = prod(comp.event_shape)
             components.append((offset, offset + event_dim))
             offset += event_dim
         return components
     else:
         # Non-blockwise: single component with full event size
-        event_dim = dist.event_shape[0]
+        event_dim = prod(dist.event_shape)
         return [(0, event_dim)]
 
+def _get_slices(task: Task, n_local: int) -> List[Tuple[str, Tuple[int, int]]]:
+    """Get the parameter names and indices for a hierarchical distribution"""
+    global_dim = task.prior_dist.dim_global
+    global_dist = task.prior_dist.global_dist
+    global_components = _get_blockwise_components(global_dist)
+    global_slices = [
+        (f"p_g_{i}", s) for i, s in enumerate(global_components)
+    ]
 
-def make_prior_fn(task):
+    # Generate sample local distribution to get component names
+    sample_global = global_dist.sample(
+        torch.Size([1])
+    )
+    local_dist = task.prior_dist.local_dist_fn(sample_global, n_local)
+    local_components = _get_blockwise_components(local_dist)
+    local_slices = [
+        (f"p_l_{i}", (start + global_dim, end + global_dim))
+        for i, (start, end) in enumerate(local_components)
+    ]
+
+    return global_slices + local_slices
+
+def make_prior_fn(task, automatic_transforms_enabled: bool = False):
     """Create prior sampling function for TFMPE.
 
     Args:
@@ -74,12 +79,6 @@ def make_prior_fn(task):
     Returns:
         prior_fn(rng, n, n_samples) -> dict of JAX arrays
     """
-    prior_dist = task.prior_dist
-    dim_global = prior_dist.dim_global
-    global_dist = prior_dist.global_dist
-
-    # Get component structure for global distribution
-    global_components = _get_blockwise_components(global_dist)
 
     def prior_fn(rng, n, n_samples):
         """Sample from prior for n local groups.
@@ -96,52 +95,34 @@ def make_prior_fn(task):
             - 'p_l_{j}': j-th local component with shape
               (n_samples, n_local, batch_shape, event_shape)
         """
-        # Sample global parameters
-        global_params_torch = global_dist.sample(
-            torch.Size([n_samples])
-        )
-
-        # Sample local parameters for n groups
-        local_dist = prior_dist.local_dist_fn(
-            global_params_torch, n
-        )
-        local_params_torch = local_dist.sample()
-
-        # Get component structure for local distribution
-        local_components = _get_blockwise_components(
-            local_dist
+        slices = _get_slices(task, n)
+        prior_dist = task.prior_dist.for_n_local(n)
+        if automatic_transforms_enabled:
+            transforms = task._get_transforms(n_l = n)["parameters"]
+            prior_dist = wrap_prior_dist(
+                prior_dist,
+                transforms
+            )
+        samples = prior_dist.sample(
+            sample_shape = torch.Size([n_samples])
         )
 
         # Convert to JAX arrays
-        global_params_jax = jnp.asarray(
-            global_params_torch.numpy()
-        )
-        local_params_jax = jnp.asarray(
-            local_params_torch.numpy()
-        )
+        samples_jax = jnp.asarray(samples)
 
         # Create structured dict for TFMPE
         param_dict = {}
 
         # Add global parameters, grouped by component
-        for i, (start, end) in enumerate(global_components):
+        for name, (start, end) in slices:
             # Extract this component's parameters
-            component_params = global_params_jax[:, start:end]
+            component_params = samples_jax[:, start:end]
             # Add batch dimension for TFMPE format
-            param_dict[f"p_g_{i}"] = component_params[
-                :, None, :
-            ]
-
-        # Add local parameters, grouped by component
-        for i, (start, end) in enumerate(local_components):
-            # Extract this component's parameters
-            component_params = local_params_jax[:, start:end]
-            # Reshape to (n_samples, n_local, -1) and add
-            # batch dimension
-            reshaped = component_params.reshape(
-                n_samples, n, -1
-            )
-            param_dict[f"p_l_{i}"] = reshaped[:, :, None, :]
+            if str.startswith(name, 'p_l_'):
+                component_params = component_params.reshape(
+                    n_samples, n, -1
+                )
+            param_dict[name] = component_params[..., None]
 
         return param_dict
 
@@ -158,21 +139,10 @@ def make_simulator_fn(task):
         simulator_fn(rng, params_dict, n) -> dict with 'y' key
     """
     prior_dist = task.prior_dist
-    dim_global = prior_dist.dim_global
-    dim_local = prior_dist.dim_local
-
-    # Extract parameter names
     global_dist = prior_dist.global_dist
-    param_names_global = []
-    for i, comp in enumerate(global_dist.distributions):
-        if hasattr(comp, "event_shape") and len(
-            comp.event_shape
-        ) > 0:
-            n_params = comp.event_shape[0]
-            for j in range(n_params):
-                param_names_global.append(f"p_g_{i}_{j}")
 
-    param_names_local = [f"p_l_{i}" for i in range(dim_local)]
+    # Get component structure for global distribution
+    global_components = _get_blockwise_components(global_dist)
 
     def simulator_fn(rng, params_dict, n):
         """Simulate observations for n local groups.
@@ -180,25 +150,47 @@ def make_simulator_fn(task):
         Args:
             rng: JAX random key
             params_dict: Dictionary of JAX arrays with global
-                and n*2 local parameters
+                and local parameters
             n: Number of local groups
 
         Returns:
             Dictionary with 'y' key containing observations
             shaped (n_samples, n, 2, 1)
         """
-        n_samples = params_dict[param_names_global[0]].shape[0]
+        n_samples = params_dict[f"p_g_{0}"].shape[0]
+
+        # Generate sample global parameters to create dynamic
+        # local distribution
+        global_params_sample = jnp.concatenate(
+            [
+                params_dict[f"p_g_{i}"].reshape(n_samples, -1)
+                for i, _ in enumerate(
+                    global_components
+                )
+            ],
+            axis=1,
+        )
+        global_torch = torch.from_numpy(
+            np.array(global_params_sample)
+        ).float()
+
+        # Get dynamic local distribution for this n
+        local_dist = prior_dist.local_dist_fn(
+            global_torch, n
+        )
+        local_components = _get_blockwise_components(
+            local_dist
+        )
 
         # Reconstruct flat parameter tensor from JAX arrays
         params_list = []
-        for name in param_names_global:
+        for i, _ in enumerate(global_components):
             params_list.append(
-                params_dict[name].reshape(n_samples, 1)
+                params_dict[f"p_g_{i}"].reshape(n_samples, -1)
             )
-        for i in range(n * 2):
-            name = param_names_local[i]
+        for i, _ in enumerate(local_components):
             params_list.append(
-                params_dict[name].reshape(n_samples, 1)
+                params_dict[f"p_l_{i}"].reshape(n_samples, -1)
             )
 
         params_flat = jnp.concatenate(params_list, axis=1)
@@ -229,21 +221,10 @@ def make_local_fn(task):
         local_fn(rng, global_samples, n) -> dict of JAX arrays
     """
     prior_dist = task.prior_dist
-    dim_global = prior_dist.dim_global
-    dim_local = prior_dist.dim_local
-
-    # Extract parameter names
     global_dist = prior_dist.global_dist
-    param_names_global = []
-    for i, comp in enumerate(global_dist.distributions):
-        if hasattr(comp, "event_shape") and len(
-            comp.event_shape
-        ) > 0:
-            n_params = comp.event_shape[0]
-            for j in range(n_params):
-                param_names_global.append(f"p_g_{i}_{j}")
 
-    param_names_local = [f"p_l_{i}" for i in range(dim_local)]
+    # Get component structure for global distribution
+    global_components = _get_blockwise_components(global_dist)
 
     def local_fn(rng, global_samples, n):
         """Sample local parameters conditioned on global.
@@ -256,18 +237,15 @@ def make_local_fn(task):
 
         Returns:
             Dictionary with local parameter names as keys and
-            JAX arrays of shape (n_samples, 1, 1, 1) as values
+            JAX arrays as values
         """
-        n_samples = global_samples[param_names_global[0]].shape[
-            0
-        ]
+        n_samples = global_samples[f"p_g_{0}"].shape[0]
 
         # Reconstruct global params tensor from JAX arrays
-        global_list = []
-        for name in param_names_global:
-            global_list.append(
-                global_samples[name].reshape(n_samples, 1)
-            )
+        global_list = [
+            global_samples[f"p_g_{i}"].reshape(n_samples, -1)
+            for i, _ in enumerate(global_components)
+        ]
         global_params = jnp.concatenate(global_list, axis=1)
 
         # Convert to torch and use prior_dist's local_dist_fn
@@ -277,19 +255,27 @@ def make_local_fn(task):
         local_dist = prior_dist.local_dist_fn(
             global_torch, n
         )
-        local_samples_torch = local_dist.sample(
-            (n_samples,)
+        local_samples_torch = local_dist.sample()
+
+        # Get component structure for local distribution
+        local_components = _get_blockwise_components(
+            local_dist
         )
 
-        # Convert to JAX and extract first n*2 local params
+        # Convert to JAX and extract local params by component
         local_samples = jnp.asarray(
             local_samples_torch.numpy()
         )
         local_params_dict = {}
-        for i in range(min(n * 2, dim_local)):
-            name = param_names_local[i]
-            local_params_dict[name] = local_samples[
-                :, i : i + 1, None, None
+        for i, (start, end) in enumerate(local_components):
+            component_params = local_samples[
+                :, start:end
+            ]
+            reshaped = component_params.reshape(
+                n_samples, n, -1
+            )
+            local_params_dict[f"p_l_{i}"] = reshaped[
+                ..., None
             ]
 
         return local_params_dict
@@ -333,7 +319,6 @@ def run(
     prior_dist = task.prior_dist
 
     # Get hierarchical structure from prior
-    dim_global = prior_dist.dim_global
     dim_local = prior_dist.dim_local
     n_groups = dim_local // 2  # For two_moons: 2 per group
 
@@ -343,20 +328,23 @@ def run(
         "y": y_obs_torch.reshape(1, n_groups, -1, 1).numpy(),
     }
 
-    # Extract parameter names from prior_dist
-    # For HierarchicalDistribution, we need to get names from
-    # the underlying global_dist (BlockwiseDistribution)
+    # Extract parameter names using component structure
     global_dist = prior_dist.global_dist
-    param_names_global = []
-    for i, comp in enumerate(global_dist.distributions):
-        if hasattr(comp, "event_shape") and len(
-            comp.event_shape
-        ) > 0:
-            n_params = comp.event_shape[0]
-            for j in range(n_params):
-                param_names_global.append(f"p_g_{i}_{j}")
+    global_components = _get_blockwise_components(global_dist)
+    param_names_global = [
+        f"p_g_{i}" for i, _ in enumerate(global_components)
+    ]
 
-    param_names_local = [f"p_l_{i}" for i in range(dim_local)]
+    # Generate sample local distribution to get component names
+    sample_global = global_dist.sample(
+        torch.Size([1])
+    )
+    local_dist = prior_dist.local_dist_fn(sample_global, n_groups)
+    local_components = _get_blockwise_components(local_dist)
+    param_names_local = [
+        f"p_l_{i}" for i, _ in enumerate(local_components)
+    ]
+
     all_param_names = param_names_global + param_names_local
     all_param_names.append("y")
 
@@ -458,14 +446,11 @@ def run(
 
     # Flatten parameters to SBIBM format
     params_list = []
-    for name in param_names_global:
-        params_list.append(posterior_params_dict[name].reshape(num_samples, 1))
-    for i in range(n_groups * 2):
-        name = param_names_local[i]
-        params_list.append(posterior_params_dict[name].reshape(num_samples, 1))
+    for name in param_names_global + param_names_local:
+        params_list.append(posterior_params_dict[name].reshape(num_samples, -1))
 
     posterior_flat = jnp.concatenate(params_list, axis=1)
-    posterior_samples = torch.from_numpy(jnp.asarray(posterior_flat)).float()
+    posterior_samples = torch.from_numpy(np.array(posterior_flat)).float()
 
     execution_time = time.time() - start_time
 

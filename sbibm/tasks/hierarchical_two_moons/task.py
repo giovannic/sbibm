@@ -119,29 +119,12 @@ class HierarchicalTwoMoons(Task):
             global_dist,
             local_dist_fn,
             dim_global=4,
-            dim_local=2 * n_l,
-            default_n_local=n_l,
+            dim_local=2,
+            n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 
-        # Build composite transform for MCMC (constrained <-> unconstrained)
-        # This maps between constrained parameter space and unconstrained R^n
-        transforms_list = []
-
-        # global_loc: Uniform[-1, 1] <-> R
-        for _ in range(2):
-            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
-
-        # global_scale: HalfNormal (R+) <-> R
-        for _ in range(2):
-            transforms_list.append(biject_to(constraints.positive))
-
-        # local params: TruncatedNormal[-1, 1] <-> R
-        for _ in range(2 * n_l):
-            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
-
-        # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        self.composite_transform = self._get_transforms()["parameters"].inv
 
     def get_prior(self):
         """Get prior distribution.
@@ -225,8 +208,28 @@ class HierarchicalTwoMoons(Task):
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
-        return {"parameters": self.composite_transform.inv}
+    def _get_transforms(self, automatic_transforms_enabled: bool = True, n_l = None):
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform for MCMC (constrained <-> unconstrained)
+        # This maps between constrained parameter space and unconstrained R^n
+        transforms_list = []
+
+        # global_loc: Uniform[-1, 1] <-> R
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
+
+        # global_scale: HalfNormal (R+) <-> R
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # local params: TruncatedNormal[-1, 1] <-> R
+        for _ in range(2 * n_l):
+            transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
+
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def _likelihood(
         self,

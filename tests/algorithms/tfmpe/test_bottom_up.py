@@ -60,14 +60,17 @@ def test_bottom_up_hierarchical_two_moons(
 
 
 @pytest.mark.parametrize(
-    "n_local,n_samples",
+    "n_local,n_samples,transforms",
     [
-        (1, 10),
-        (5, 5),
-        (10, 3),
+        (1, 10, False),
+        (5, 5, False),
+        (10, 3, False),
+        (1, 10, True),
+        (5, 5, True),
+        (10, 3, True),
     ],
 )
-def test_prior_fn_pytree_shapes(n_local, n_samples):
+def test_prior_fn_pytree_shapes(n_local, n_samples, transforms):
     """Test PyTree structure and shapes from prior_fn.
 
     Validates that prior_fn returns correctly structured JAX
@@ -77,7 +80,7 @@ def test_prior_fn_pytree_shapes(n_local, n_samples):
     - 'p_l_0' has shape (n_samples, n_local, 2, 1)
     """
     task = sbibm.get_task("hierarchical_two_moons")
-    prior_fn = make_prior_fn(task)
+    prior_fn = make_prior_fn(task, transforms)
     rng = jax.random.PRNGKey(0)
 
     # Call prior_fn
