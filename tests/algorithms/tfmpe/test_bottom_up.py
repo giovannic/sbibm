@@ -124,14 +124,17 @@ def test_prior_fn_pytree_shapes(n_local, n_samples, transforms):
 
 
 @pytest.mark.parametrize(
-    "n_local,n_samples",
+    "n_local,n_samples,transforms",
     [
-        (1, 10),
-        (5, 5),
-        (10, 3),
+        (1, 10, False),
+        (5, 5, False),
+        (10, 3, False),
+        (1, 10, True),
+        (5, 5, True),
+        (10, 3, True),
     ],
 )
-def test_simulator_fn_pytree_shapes(n_local, n_samples):
+def test_simulator_fn_pytree_shapes(n_local, n_samples, transforms):
     """Test PyTree structure and shapes from simulator_fn.
 
     Validates that simulator_fn returns correctly structured JAX
@@ -141,8 +144,8 @@ def test_simulator_fn_pytree_shapes(n_local, n_samples):
       TFMPE format
     """
     task = sbibm.get_task("hierarchical_two_moons")
-    prior_fn = make_prior_fn(task)
-    simulator_fn = make_simulator_fn(task)
+    prior_fn = make_prior_fn(task, automatic_transforms_enabled=transforms)
+    simulator_fn = make_simulator_fn(task, automatic_transforms_enabled=transforms)
 
     rng = jax.random.PRNGKey(0)
 
@@ -171,14 +174,17 @@ def test_simulator_fn_pytree_shapes(n_local, n_samples):
 
 
 @pytest.mark.parametrize(
-    "n_local,n_samples",
+    "n_local,n_samples,transforms",
     [
-        (1, 10),
-        (5, 5),
-        (10, 3),
+        (1, 10, False),
+        (5, 5, False),
+        (10, 3, False),
+        (1, 10, True),
+        (5, 5, True),
+        (10, 3, True),
     ],
 )
-def test_local_fn_pytree_shapes(n_local, n_samples):
+def test_local_fn_pytree_shapes(n_local, n_samples, transforms):
     """Test PyTree structure and shapes from local_fn.
 
     Validates that local_fn returns correctly structured JAX
@@ -187,8 +193,8 @@ def test_local_fn_pytree_shapes(n_local, n_samples):
     - Local params have shape (n_samples, n_local, 2, 1)
     """
     task = sbibm.get_task("hierarchical_two_moons")
-    prior_fn = make_prior_fn(task)
-    local_fn = make_local_fn(task)
+    prior_fn = make_prior_fn(task, transforms)
+    local_fn = make_local_fn(task, transforms)
 
     rng = jax.random.PRNGKey(0)
 
@@ -210,6 +216,7 @@ def test_local_fn_pytree_shapes(n_local, n_samples):
     )
 
     # Validate shape
+    assert isinstance(local_params_dict['p_l_0'], jnp.ndarray)
     assert local_params_dict["p_l_0"].shape == (
         n_samples,
         n_local,

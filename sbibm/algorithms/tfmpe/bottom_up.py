@@ -129,7 +129,7 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
     return prior_fn
 
 
-def make_simulator_fn(task):
+def make_simulator_fn(task, automatic_transforms_enabled: bool=False):
     """Create simulator function for TFMPE.
 
     Args:
@@ -138,12 +138,6 @@ def make_simulator_fn(task):
     Returns:
         simulator_fn(rng, params_dict, n) -> dict with 'y' key
     """
-    prior_dist = task.prior_dist
-    global_dist = prior_dist.global_dist
-
-    # Get component structure for global distribution
-    global_components = _get_blockwise_components(global_dist)
-
     def simulator_fn(rng, params_dict, n):
         """Simulate observations for n local groups.
 
@@ -157,53 +151,27 @@ def make_simulator_fn(task):
             Dictionary with 'y' key containing observations
             shaped (n_samples, n, 2, 1)
         """
-        n_samples = params_dict[f"p_g_{0}"].shape[0]
-
-        # Generate sample global parameters to create dynamic
-        # local distribution
-        global_params_sample = jnp.concatenate(
-            [
-                params_dict[f"p_g_{i}"].reshape(n_samples, -1)
-                for i, _ in enumerate(
-                    global_components
-                )
-            ],
-            axis=1,
-        )
-        global_torch = torch.from_numpy(
-            np.array(global_params_sample)
-        ).float()
-
-        # Get dynamic local distribution for this n
-        local_dist = prior_dist.local_dist_fn(
-            global_torch, n
-        )
-        local_components = _get_blockwise_components(
-            local_dist
-        )
-
-        # Reconstruct flat parameter tensor from JAX arrays
-        params_list = []
-        for i, _ in enumerate(global_components):
-            params_list.append(
-                params_dict[f"p_g_{i}"].reshape(n_samples, -1)
-            )
-        for i, _ in enumerate(local_components):
-            params_list.append(
-                params_dict[f"p_l_{i}"].reshape(n_samples, -1)
-            )
-
+        slices = _get_slices(task, n)
+        params_list = [
+            params_dict[name].reshape(params_dict[name].shape[0], -1)
+            for name, _ in slices
+        ]
         params_flat = jnp.concatenate(params_list, axis=1)
 
         # Convert to torch and call task simulator
         params_torch = torch.from_numpy(
             np.array(params_flat)
         ).float()
+
+        if automatic_transforms_enabled:
+            transforms = task._get_transforms(n_l = n)["parameters"]
+            params_torch = transforms.inv(params_torch)
+
         obs_torch = task.get_simulator()(params_torch)
 
         # Convert back to JAX and reshape to n groups
         obs_jax = jnp.asarray(obs_torch.numpy()).reshape(
-            n_samples, n, 2, 1
+            obs_torch.shape[0], n, -1, 1
         )
 
         return {"y": obs_jax}
@@ -211,7 +179,7 @@ def make_simulator_fn(task):
     return simulator_fn
 
 
-def make_local_fn(task):
+def make_local_fn(task, automatic_transforms_enabled: bool = False):
     """Create local parameter sampling function for TFMPE.
 
     Args:
@@ -239,12 +207,13 @@ def make_local_fn(task):
             Dictionary with local parameter names as keys and
             JAX arrays as values
         """
-        n_samples = global_samples[f"p_g_{0}"].shape[0]
+        slices = _get_slices(task, n)
 
         # Reconstruct global params tensor from JAX arrays
         global_list = [
-            global_samples[f"p_g_{i}"].reshape(n_samples, -1)
-            for i, _ in enumerate(global_components)
+            global_samples[name].reshape(global_samples[name].shape[0], -1)
+            for name, _ in slices
+            if str.startswith(name, 'p_g_')
         ]
         global_params = jnp.concatenate(global_list, axis=1)
 
@@ -255,28 +224,30 @@ def make_local_fn(task):
         local_dist = prior_dist.local_dist_fn(
             global_torch, n
         )
-        local_samples_torch = local_dist.sample()
-
-        # Get component structure for local distribution
-        local_components = _get_blockwise_components(
-            local_dist
+        local_torch = local_dist.sample().reshape(
+            global_torch.shape[0],
+            -1
         )
 
-        # Convert to JAX and extract local params by component
-        local_samples = jnp.asarray(
-            local_samples_torch.numpy()
-        )
+        samples = torch.cat([global_torch, local_torch], 1)
+
+        if automatic_transforms_enabled:
+            transforms = task._get_transforms(n_l = n)
+            samples = transforms['parameters'](samples)
+
         local_params_dict = {}
-        for i, (start, end) in enumerate(local_components):
-            component_params = local_samples[
-                :, start:end
-            ]
-            reshaped = component_params.reshape(
-                n_samples, n, -1
-            )
-            local_params_dict[f"p_l_{i}"] = reshaped[
-                ..., None
-            ]
+        for name, (start, end) in slices:
+            if str.startswith(name, 'p_l_'):
+                component_params = samples[
+                    :, start:end
+                ]
+                reshaped = component_params.reshape(
+                    samples.shape[0], n, -1
+                )
+                reshaped_jax = jnp.asarray(reshaped[
+                    ..., None
+                ])
+                local_params_dict[name] = reshaped_jax
 
         return local_params_dict
 
@@ -288,6 +259,7 @@ def run(
     num_samples: int,
     num_simulations: int,
     num_observation: int,
+    automatic_transforms_enabled: bool = False,
     **kwargs,
 ) -> Tuple[torch.Tensor, float, Dict]:
     """Run TFMPE bottom-up inference on a hierarchical task.
@@ -349,9 +321,9 @@ def run(
     all_param_names.append("y")
 
     # Create callback functions for TFMPE using helpers
-    prior_fn = make_prior_fn(task)
-    simulator_fn = make_simulator_fn(task)
-    local_fn = make_local_fn(task)
+    prior_fn = make_prior_fn(task, automatic_transforms_enabled)
+    simulator_fn = make_simulator_fn(task, automatic_transforms_enabled)
+    local_fn = make_local_fn(task, automatic_transforms_enabled)
 
     # Define which parameters are global
     global_names = param_names_global

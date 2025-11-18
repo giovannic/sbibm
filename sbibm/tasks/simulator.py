@@ -62,4 +62,4 @@ class Simulator:
 
         self.num_simulations += requested_simulations
 
-        return self.flatten_data(data)
+        return data
