@@ -35,6 +35,7 @@ def test_bottom_up_hierarchical_two_moons(
         num_observation=num_observation,
         num_samples=num_samples,
         num_simulations=num_simulations,
+        automatic_transforms_enabled=True
     )
 
     # Validate output shape
@@ -54,9 +55,14 @@ def test_bottom_up_hierarchical_two_moons(
     assert not torch.isnan(samples).any()
     assert not torch.isinf(samples).any()
 
-    # Validate samples fall strictly within prior bounds [-1, 1]
-    assert samples.min() >= -1.0, f"Sample min {samples.min()} < -1.0"
-    assert samples.max() <= 1.0, f"Sample max {samples.max()} > 1.0"
+    # Validate scales are positive
+    scales = samples[:, 2:4]
+    assert scales.min() >= 0, f"scales must be positive but found {scales.min()}"
+
+    # Validate local samples fall strictly within prior bounds [-1, 1]
+    local_samples = samples[:,4:]
+    assert local_samples.min() >= -1.0, f"local sample min {local_samples.min()} < -1.0"
+    assert local_samples.max() <= 1.0, f"local sample max {local_samples.max()} > 1.0"
 
 
 @pytest.mark.parametrize(

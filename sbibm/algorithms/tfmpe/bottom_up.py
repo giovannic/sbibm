@@ -287,37 +287,18 @@ def run(
         num_observation=num_observation
     )
 
-    # Get prior distribution (already in constrained space)
-    prior_dist = task.prior_dist
-
-    # Get hierarchical structure from prior
-    dim_local = prior_dist.dim_local
-    n_groups = dim_local // 2  # For two_moons: 2 per group
+    # Get number of groups
+    n_local = task.n_l
 
     # Reshape observation to structured format
-    # (n_groups, dims_per_group, 1)
+    # (n_local, dims_per_group, 1)
     y_obs_dict = {
-        "y": y_obs_torch.reshape(1, n_groups, -1, 1).numpy(),
+        "y": y_obs_torch.reshape(1, n_local, -1, 1).numpy(),
     }
 
-    # Extract parameter names using component structure
-    global_dist = prior_dist.global_dist
-    global_components = _get_blockwise_components(global_dist)
-    param_names_global = [
-        f"p_g_{i}" for i, _ in enumerate(global_components)
-    ]
+    slices = _get_slices(task, n_local)
 
-    # Generate sample local distribution to get component names
-    sample_global = global_dist.sample(
-        torch.Size([1])
-    )
-    local_dist = prior_dist.local_dist_fn(sample_global, n_groups)
-    local_components = _get_blockwise_components(local_dist)
-    param_names_local = [
-        f"p_l_{i}" for i, _ in enumerate(local_components)
-    ]
-
-    all_param_names = param_names_global + param_names_local
+    all_param_names = [name for name, _ in slices]
     all_param_names.append("y")
 
     # Create callback functions for TFMPE using helpers
@@ -326,12 +307,19 @@ def run(
     local_fn = make_local_fn(task, automatic_transforms_enabled)
 
     # Define which parameters are global
-    global_names = param_names_global
+    global_names = [
+        name for name in all_param_names
+        if str.startswith(name, 'p_g_')
+    ]
+    local_names = [
+        name for name in all_param_names
+        if str.startswith(name, 'p_l_')
+    ]
 
     # Generate sample data for token creation
     rng = jax.random.PRNGKey(42)
     rng, key = jax.random.split(rng)
-    sample_params = prior_fn(key, n=n_groups, n_samples=10)
+    sample_params = prior_fn(key, n=n_local, n_samples=10)
 
     # Create labeller and independence structure
     labeller = Labeller.for_keys(all_param_names)
@@ -341,7 +329,7 @@ def run(
     independence = Independence(
         cross_local=[
             (name, "y", (0, 0))
-            for name in param_names_local
+            for name in local_names
         ]
     )
 
@@ -399,7 +387,7 @@ def run(
         prior_fn=prior_fn,
         local_fn=local_fn,
         global_names=global_names,
-        n_groups=n_groups,
+        n_groups=n_local,
         n_rounds=1,
         n_samples_per_round=n_samples_per_round,
         n_val_samples=n_val_samples,
@@ -414,15 +402,25 @@ def run(
     # Generate posterior samples
     # For now, use prior samples as placeholder
     rng, key = jax.random.split(rng)
-    posterior_params_dict = prior_fn(key, n=n_groups, n_samples=num_samples)
+    posterior_params_dict = prior_fn(key, n=n_local, n_samples=num_samples)
 
     # Flatten parameters to SBIBM format
     params_list = []
-    for name in param_names_global + param_names_local:
-        params_list.append(posterior_params_dict[name].reshape(num_samples, -1))
+    for name in global_names + local_names:
+        params_list.append(
+            posterior_params_dict[name].reshape(num_samples, -1)
+        )
 
     posterior_flat = jnp.concatenate(params_list, axis=1)
     posterior_samples = torch.from_numpy(np.array(posterior_flat)).float()
+
+    if automatic_transforms_enabled:
+        transform = task._get_transforms(n_l=n_local)
+        print(posterior_samples.shape)
+        print(transform['parameters'])
+        posterior_samples = transform['parameters'].inv(
+            posterior_samples
+        )
 
     execution_time = time.time() - start_time
 
@@ -431,7 +429,7 @@ def run(
         "n_samples_per_round": n_samples_per_round,
         "n_iter_per_round": n_iter_per_round,
         "batch_size": batch_size,
-        "n_groups": n_groups,
+        "n_local": n_local,
     }
 
     return posterior_samples, execution_time, metadata
