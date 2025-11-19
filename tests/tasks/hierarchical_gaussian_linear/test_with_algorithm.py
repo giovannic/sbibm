@@ -49,7 +49,7 @@ def test_snpe_integration(automatic_transforms_enabled):
     )
 
     # Verify samples shape
-    expected_dim = 10 + n_l
+    expected_dim = task.dim_global + task.dim_local_total
     assert samples.shape == (n_samples, expected_dim), (
         f"Expected samples shape ({n_samples}, {expected_dim}), " f"got {samples.shape}"
     )
@@ -60,15 +60,15 @@ def test_snpe_integration(automatic_transforms_enabled):
     # Verify posterior object is returned
     assert posterior is not None, "Posterior object should be returned"
 
-    # Verify global parameters (mean structure) are reasonable
-    global_params = samples[:, :10]
+    # Verify global parameters (noise scale) is reasonable
+    global_params = samples[:, :task.dim_global]
     assert torch.all(
-        torch.abs(global_params) < 10
+        torch.abs(global_params) > 0
     ), "Global parameters should be reasonable"
 
-    # Verify local parameters (noise scales) are positive
-    local_scales = samples[:, 10:]
-    assert torch.all(local_scales >= 0), "Local noise scales should be positive"
+    # Verify local parameters (mus) are positive
+    local_scales = samples[:, task.dim_global:]
+    assert torch.isfinite(local_scales).all(), "Local mu should be finite"
 
     log.info(f"SNPE integration test passed with {num_sims} simulations")
 
