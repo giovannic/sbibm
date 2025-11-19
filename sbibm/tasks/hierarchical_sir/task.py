@@ -36,16 +36,16 @@ class HierarchicalSIR(Task):
         Hierarchical extension of the SIR task where each observation consists
         of n_l local contexts (e.g., different regions). Uses Strategy 1
         (natural global/local split): global parameter represents shared
-        transmission rate (beta) across regions, while local parameters
-        represent region-specific recovery rates (gamma).
+        recovery rate (gamma) across regions, while local parameters
+        represent region-specific transmission rates (beta).
 
         Global parameters (dim=1):
-            - beta: Transmission rate shared across all regions
-            - Prior: LogNormal(log(0.4), 0.5)
+            - gamma: Recovery rate shared across all regions
+            - Prior: LogNormal(log(0.125), 0.2)
 
         Local parameters (dim=n_l):
-            - gamma_i: Recovery rate per region
-            - Prior: LogNormal(log(0.125), 0.2) for each region
+            - beta_i: Transmission rate per region
+            - Prior: LogNormal(log(0.4), 0.5) for each region
 
         Args:
             n_l: Number of local contexts/regions (default: 5)
@@ -90,7 +90,7 @@ class HierarchicalSIR(Task):
         ]
 
         super().__init__(
-            dim_parameters=1 + n_l,  # 1 global (beta) + n_l local (gamma)
+            dim_parameters=1 + n_l,  # 1 global (gamma) + n_l local (beta)
             dim_data=dim_data,
             name="hierarchical_sir",
             name_display="Hierarchical SIR",
@@ -103,21 +103,21 @@ class HierarchicalSIR(Task):
         )
 
         # Define hierarchical prior distribution
-        # Global parameter: beta (transmission rate)
+        # Global parameter: gamma (recovery rate)
         global_dist = pdist.LogNormal(
-            loc=torch.tensor([math.log(0.4)]),
-            scale=torch.tensor([0.5]),
+            loc=torch.tensor([math.log(0.125)]),
+            scale=torch.tensor([0.2]),
         ).to_event(1)
 
-        # Local parameters: gamma_i (recovery rates per region)
+        # Local parameters: beta_i (transmission rates per region)
         def local_dist_fn(global_params, n_local):
-            # Return LogNormal distribution for n_local recovery rates
-            # Independent of global beta
+            # Return LogNormal distribution for n_local transmission rates
+            # Independent of global gamma
             batch_shape = global_params.shape[:-1]
             return pdist.Independent(
                 pdist.LogNormal(
-                    loc=torch.tensor(math.log(0.125)),
-                    scale=torch.tensor(0.2),
+                    loc=torch.tensor(math.log(0.4)),
+                    scale=torch.tensor(0.5),
                 ).expand(list(batch_shape) + [n_local]),
                 1,
             )
@@ -135,10 +135,10 @@ class HierarchicalSIR(Task):
         # All parameters are log-scale (positive real) -> R
         transforms_list = []
 
-        # Beta: LogNormal (R+) <-> R
+        # Gamma: LogNormal (R+) <-> R
         transforms_list.append(biject_to(constraints.positive))
 
-        # Gammas: LogNormal (R+) <-> R
+        # Betas: LogNormal (R+) <-> R
         for _ in range(n_l):
             transforms_list.append(biject_to(constraints.positive))
 
@@ -160,15 +160,15 @@ class HierarchicalSIR(Task):
         Args:
             t: Time (scalar)
             u: State vector shape (batch, 3) with [S, I, R]
-            args: Tuple of (beta, gamma) with shape (batch, 2)
+            args: Tuple of (gamma, beta) with shape (batch, 2)
 
         Returns:
             du/dt: State derivatives shape (batch, 3)
         """
         S = u[:, 0]
         I = u[:, 1]
-        beta = args[:, 0]
-        gamma = args[:, 1]
+        gamma = args[:, 0]
+        beta = args[:, 1]
 
         dS = -beta * S * I / self.N
         dI = beta * S * I / self.N - gamma * I
@@ -179,13 +179,13 @@ class HierarchicalSIR(Task):
     def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
         """Solve hierarchical SIR ODE for batched parameters.
 
-        For each sample, we have global beta and n_local gammas.
+        For each sample, we have global gamma and n_local betas.
         We flatten to (num_samples * n_local,) batch dimension for
         Diffrax vectorization.
 
         Args:
             parameters: Shape (num_samples, 1 + n_local) with
-                [beta, gamma_1, ..., gamma_n_local]
+                [gamma, beta_1, ..., beta_n_local]
 
         Returns:
             Trajectories shape (num_samples, n_local, 3, num_timepoints)
@@ -197,18 +197,18 @@ class HierarchicalSIR(Task):
             0, self.days, int(self.days / self.saveat) + 1
         )
 
-        # Extract beta and gamma for each sample
-        beta = parameters[:, 0]  # (num_samples,)
-        gamma = parameters[:, 1:]  # (num_samples, n_local)
+        # Extract gamma and beta for each sample
+        gamma = parameters[:, 0]  # (num_samples,)
+        beta = parameters[:, 1:]  # (num_samples, n_local)
 
         # Create flattened batch: (num_samples * n_local,)
-        # Repeat beta for each region
-        beta_expanded = beta.repeat_interleave(n_local)
-        gamma_flat = gamma.reshape(-1)
+        # Repeat gamma for each region
+        gamma_expanded = gamma.repeat_interleave(n_local)
+        beta_flat = beta.reshape(-1)
 
         # Stack into args format: (num_samples * n_local, 2)
         params_jax = jnp.stack(
-            [beta_expanded.numpy(), gamma_flat.numpy()], axis=1
+            [gamma_expanded.numpy(), beta_flat.numpy()], axis=1
         )
 
         # Initial conditions for all batch elements
@@ -255,9 +255,9 @@ class HierarchicalSIR(Task):
 
     def get_labels_parameters(self):
         """Get list containing parameter labels"""
-        labels = [r"$\beta$"]  # Global parameter
+        labels = [r"$\gamma$"]  # Global parameter
         for i in range(self.n_l):
-            labels.append(rf"$\gamma_{i}$")  # Local parameters
+            labels.append(rf"$\beta_{i}$")  # Local parameters
         return labels
 
     def get_prior(self):
@@ -450,10 +450,10 @@ class HierarchicalSIR(Task):
         # All parameters are log-scale (positive real) -> R
         transforms_list = []
 
-        # Beta: LogNormal (R+) <-> R
+        # Gamma: LogNormal (R+) <-> R
         transforms_list.append(biject_to(constraints.positive))
 
-        # Gammas: LogNormal (R+) <-> R
+        # Betas: LogNormal (R+) <-> R
         for _ in range(n_l):
             transforms_list.append(biject_to(constraints.positive))
 

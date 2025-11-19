@@ -1,0 +1,2 @@
+task,algorithm,num_simulations,num_observation,elapsed_time,seed,reverse_kl,lc2st_p_value,lc2st_test_statistic,lc2st_reject
+hierarchical_sir,deepset,100,1,5.177552938461304,42,8591.6689453125,0.0,0.25,True

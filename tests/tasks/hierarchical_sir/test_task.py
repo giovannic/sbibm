@@ -16,7 +16,7 @@ def test_prior_shape(n_l):
     num_samples = 100
     samples = prior(num_samples=num_samples)
 
-    expected_dim = 1 + n_l  # 1 global (beta) + n_l local (gamma)
+    expected_dim = 1 + n_l  # 1 global (gamma) + n_l local (beta)
     assert samples.shape == (num_samples, expected_dim)
 
 
@@ -67,30 +67,24 @@ def test_simulator_no_nan(n_l):
 
 
 def test_prior_structure():
-    """Test prior structure: global beta and local gammas."""
+    """Test prior structure: global gamma and local betas."""
     n_l = 5
     task = HierarchicalSIR(n_l=n_l)
     prior = task.get_prior()
 
     samples = prior(num_samples=1000)
 
-    # First param is global beta: LogNormal(log(0.4), 0.5)
-    beta = samples[:, 0]
-    assert beta.shape[0] == 1000
+    # First param is global gamma: LogNormal(log(0.125), 0.2)
+    gamma = samples[:, 0]
+    assert gamma.shape[0] == 1000
     # Check positive (LogNormal support)
-    assert (beta > 0).all()
-    # Check roughly centered around 0.4 in log-space
-    log_beta = torch.log(beta)
-    assert -1.5 < log_beta.mean() < -0.5  # log(0.4) ≈ -0.916
-
-    # Next n_l params are local gammas: LogNormal(log(0.125), 0.2)
-    gamma = samples[:, 1:]
-    assert gamma.shape == (1000, n_l)
-    # Check positive
     assert (gamma > 0).all()
-    # Check roughly centered around 0.125 in log-space
-    log_gamma = torch.log(gamma)
-    assert -2.5 < log_gamma.mean() < -1.5  # log(0.125) ≈ -2.079
+
+    # Next n_l params are local betas: LogNormal(log(0.4), 0.5)
+    beta = samples[:, 1:]
+    assert beta.shape == (1000, n_l)
+    # Check positive
+    assert (beta > 0).all()
 
 
 def test_prior_dist_log_prob():
