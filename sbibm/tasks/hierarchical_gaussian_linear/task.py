@@ -7,7 +7,10 @@ from pyro import distributions as pdist
 from pyro.distributions import constraints
 from pyro.distributions.transforms import biject_to
 
-from sbibm.tasks.distributions import HierarchicalDistribution, SummedStackTransform
+from sbibm.tasks.distributions import (
+    HierarchicalDistribution,
+    SummedStackTransform,
+)
 from sbibm.tasks.simulator import Simulator
 from sbibm.tasks.task import Task
 
@@ -110,38 +113,30 @@ class HierarchicalGaussianLinear(Task):
             pdist.HalfNormal(simulator_scale).expand([1]), 1
         )
 
-        # Local parameters: context-specific means (dim_local_total total
-        # across all contexts)
-        def local_dist_fn(global_params):
+        # Local parameters: context-specific means
+        # Returns flat distribution over all local params across n_local groups
+        def local_dist_fn(global_params, n_local):
             # Return independent Normal distributions for all local means.
-            # dim_local_total = dim_local_per_context * n_l
-            # Independent of global_params
+            # dim_local_per_context dimensions per context
+            # Total: n_local * dim_local_per_context
             batch_shape = global_params.shape[:-1]
+            total_local_dim = n_local * dim_local_per_context
             return pdist.Independent(
                 pdist.Normal(
-                    loc=torch.zeros(dim_local_total),
-                    scale=prior_scale * torch.ones(dim_local_total),
-                ).expand(list(batch_shape) + [dim_local_total]),
+                    loc=torch.zeros(total_local_dim),
+                    scale=prior_scale * torch.ones(total_local_dim),
+                ).expand(list(batch_shape) + [total_local_dim]),
                 1,
             )
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=dim_global, dim_local=dim_local_total
+            global_dist,
+            local_dist_fn,
+            dim_global=dim_global,
+            dim_local=dim_local_per_context,
+            n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
-
-        # Build composite transform (constrained <-> unconstrained)
-        transforms_list = []
-
-        # global_scale: HalfNormal (R+) <-> R
-        transforms_list.append(biject_to(constraints.positive))
-
-        # local_means: Normal (unbounded) - use identity transform
-        for _ in range(dim_local_total):
-            transforms_list.append(torch.distributions.transforms.identity_transform)
-
-        # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
 
     def get_prior(self):
         """Get prior distribution.
@@ -174,9 +169,14 @@ class HierarchicalGaussianLinear(Task):
             global_scale = parameters[:, : self.dim_global]  # noqa: E203
             local_means = parameters[:, self.dim_global :]  # noqa: E203
 
+            # Infer n_local from parameter shape
+            # local_means has shape (batch_size, n_local * dim_local_per_context)
+            n_local_total = local_means.shape[1]
+            n_local = n_local_total // self.dim_local_per_context
+
             # For each local context, sample observations
             observations = []
-            for i in range(self.n_l):
+            for i in range(n_local):
                 # Extract mean for context i
                 start_idx = i * self.dim_local_per_context
                 end_idx = (i + 1) * self.dim_local_per_context
@@ -207,16 +207,39 @@ class HierarchicalGaussianLinear(Task):
         """
         return self.prior_dist
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
+    def _get_transforms(
+        self,
+        automatic_transforms_enabled: bool = True,
+        n_l: Optional[int] = None,
+        **kwargs: Any,
+    ):
         """Get transforms for converting between constrained and unconstrained space.
 
         Args:
             automatic_transforms_enabled: Whether to return transforms
+            n_l: Number of local contexts (defaults to self.n_l)
 
         Returns:
             Dictionary with 'parameters' key containing the transform
         """
-        return {"parameters": self.composite_transform.inv}
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform (constrained <-> unconstrained)
+        transforms_list = []
+
+        # global_scale: HalfNormal (R+) <-> R
+        transforms_list.append(biject_to(constraints.positive))
+
+        # local_means: Normal (unbounded) - use identity transform
+        # Total local dimensions: n_l * dim_local_per_context
+        total_local_dim = n_l * self.dim_local_per_context
+        for _ in range(total_local_dim):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def _likelihood(
         self,

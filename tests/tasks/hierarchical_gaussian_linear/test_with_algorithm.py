@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from sbibm.algorithms.sbi.snpe import run as run_snpe
+from sbibm.algorithms.tfmpe.bottom_up import run as run_bottom_up
 from sbibm.tasks.hierarchical_gaussian_linear.task import (
     HierarchicalGaussianLinear,
 )
@@ -70,3 +71,69 @@ def test_snpe_integration(automatic_transforms_enabled):
     assert torch.all(local_scales >= 0), "Local noise scales should be positive"
 
     log.info(f"SNPE integration test passed with {num_sims} simulations")
+
+
+def test_bottom_up_hierarchical_gaussian_linear(
+    num_observation=1,
+    num_samples=100,
+    num_simulations=100,
+):
+    """Integration test for TFMPE bottom-up on hierarchical Gaussian
+    linear.
+
+    Validates that the bottom_up algorithm wrapper:
+    - Loads the task and observation
+    - Runs TFMPE training
+    - Returns samples with correct shape
+    - Returns execution time and metadata
+    - Samples fall within prior bounds (global scale > 0)
+    """
+    task = HierarchicalGaussianLinear(n_l=5)
+
+    # Run the algorithm
+    samples, execution_time, metadata = run_bottom_up(
+        task=task,
+        num_observation=num_observation,
+        num_samples=num_samples,
+        num_simulations=num_simulations,
+        automatic_transforms_enabled=True,
+    )
+
+    # Validate output shape
+    assert isinstance(samples, torch.Tensor)
+    assert samples.shape == (num_samples, task.dim_parameters)
+
+    # Validate execution time was recorded
+    assert isinstance(execution_time, float)
+    assert execution_time > 0.0
+
+    # Validate metadata
+    assert isinstance(metadata, dict)
+    assert "losses" in metadata
+    assert "n_samples_per_round" in metadata
+
+    # Validate samples are not NaN or Inf
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+    # Validate global scale (first parameter) is positive
+    global_scale = samples[:, 0]
+    assert (
+        global_scale.min() >= 0
+    ), f"global scale must be positive but found {global_scale.min()}"
+
+    # Validate local means are within reasonable bounds
+    # (Normal distribution, so shouldn't be extreme)
+    local_means = samples[:, 1:]
+    assert not torch.isnan(local_means).any()
+    assert not torch.isinf(local_means).any()
+
+    log.info(
+        f"TFMPE bottom-up completed on hierarchical_gaussian_linear:"
+        f"\n  Num simulations: {num_simulations}"
+        f"\n  Sample shape: {samples.shape}"
+        f"\n  Global scale range: [{global_scale.min().item():.3f}, "
+        f"{global_scale.max().item():.3f}]"
+        f"\n  Local means range: [{local_means.min().item():.3f}, "
+        f"{local_means.max().item():.3f}]"
+    )

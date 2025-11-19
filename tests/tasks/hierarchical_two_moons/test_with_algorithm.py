@@ -16,6 +16,7 @@ from sbibm.algorithms.sbi.utils import (
     wrap_prior_dist,
     wrap_simulator_fn,
 )
+from sbibm.algorithms.tfmpe.bottom_up import run as run_bottom_up
 from sbibm.metrics.lc2st import lc2st
 from sbibm.metrics.reverse_kl import reverse_kl
 from sbibm.tasks.hierarchical_two_moons.task import HierarchicalTwoMoons
@@ -595,4 +596,67 @@ def test_snpe_two_rounds():
         f"{global_scale.max().item():.3f}]"
         f"\n  Local params range: [{local_params.min().item():.3f}, "
         f"{local_params.max().item():.3f}]"
+    )
+
+
+def test_bottom_up_hierarchical_two_moons(
+    task_name="hierarchical_two_moons",
+    num_observation=1,
+    num_samples=100,
+    num_simulations=100,
+):
+    """Integration test for TFMPE bottom-up on hierarchical two moons.
+
+    Validates that the bottom_up algorithm wrapper:
+    - Loads the task and observation
+    - Runs TFMPE training
+    - Returns samples with correct shape
+    - Returns execution time and metadata
+    - Samples fall within prior bounds
+    """
+    task = HierarchicalTwoMoons(n_l=5)
+
+    # Run the algorithm
+    samples, execution_time, metadata = run_bottom_up(
+        task=task,
+        num_observation=num_observation,
+        num_samples=num_samples,
+        num_simulations=num_simulations,
+        automatic_transforms_enabled=True,
+    )
+
+    # Validate output shape
+    assert isinstance(samples, torch.Tensor)
+    assert samples.shape == (num_samples, task.dim_parameters)
+
+    # Validate execution time was recorded
+    assert isinstance(execution_time, float)
+    assert execution_time > 0.0
+
+    # Validate metadata
+    assert isinstance(metadata, dict)
+    assert "losses" in metadata
+    assert "n_samples_per_round" in metadata
+
+    # Validate samples are not NaN or Inf
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+    # Validate scales are positive
+    scales = samples[:, 2:4]
+    assert scales.min() >= 0, f"scales must be positive but found {scales.min()}"
+
+    # Validate local samples fall strictly within prior bounds [-1, 1]
+    local_samples = samples[:, 4:]
+    assert local_samples.min() >= -1.0, f"local sample min {local_samples.min()} < -1.0"
+    assert local_samples.max() <= 1.0, f"local sample max {local_samples.max()} > 1.0"
+
+    log.info(
+        f"TFMPE bottom-up completed on hierarchical_two_moons:"
+        f"\n  Num simulations: {num_simulations}"
+        f"\n  Sample shape: {samples.shape}"
+        f"\n  Scales range: [{scales.min().item():.3f}, "
+        f"{scales.max().item():.3f}]"
+        f"\n  Local params range: [{local_samples.min().item():.3f}, "
+        f"{local_samples.max().item():.3f}]"
     )
