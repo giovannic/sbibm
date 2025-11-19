@@ -358,7 +358,7 @@ class HierarchicalDistribution(
 
         # Compute log p(local | global)
         local_dist = self.local_dist_fn(
-            global_params, self.default_n_local
+            global_params, self.n_local
         )
         log_prob_local = local_dist.log_prob(local_params)
 
@@ -380,6 +380,7 @@ class HierarchicalDistribution(
         new.local_dist_fn = self.local_dist_fn
         new.dim_global = self.dim_global
         new.dim_local = self.dim_local
+        new.n_local = self.n_local
         super(HierarchicalDistribution, new).__init__(
             batch_shape, self.event_shape, validate_args=False
         )

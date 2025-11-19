@@ -104,15 +104,17 @@ class HierarchicalTwoMoons(Task):
             locs_expanded = (
                 locs.unsqueeze(-2)
                 .expand(list(batch_shape) + [n_local, 2])
+                .reshape(list(batch_shape) + [-1])
             )
             scales_expanded = (
                 scales.unsqueeze(-2)
                 .expand(list(batch_shape) + [n_local, 2])
+                .reshape(list(batch_shape) + [-1])
             )
 
             return pdist.Independent(
                 TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0),
-                2,
+                1,
             )
 
         self.prior_dist = HierarchicalDistribution(
