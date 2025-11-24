@@ -79,11 +79,20 @@ class TFMPEPosterior:
         """
         num_samples = shape[0]
 
-        # Create parameter tokens template
-        param_dict_template = {
-            name: jnp.ones((1, self.n_local if "p_l_" in name else 1, 1))
-            for name, _ in self.slices
-        }
+        # Create parameter tokens template with correct shapes
+        # For each parameter, calculate event_dim from the slice size
+        param_dict_template = {}
+        for name, (start, end) in self.slices:
+            event_dim = end - start
+            if name.startswith("p_l_"):
+                # Local params: (1, n_local, event_dim, 1)
+                param_dict_template[name] = jnp.ones(
+                    (1, self.n_local, event_dim, 1)
+                )
+            else:
+                # Global params: (1, event_dim, 1)
+                param_dict_template[name] = jnp.ones((1, event_dim, 1))
+
         param_dict_samples = {
             key: jnp.tile(
                 value, (num_samples,) + (1,) * (value.ndim - 1)
@@ -108,30 +117,42 @@ class TFMPEPosterior:
         # Convert tokens back to flat tensor format
         posterior_dict = posterior_tokens.decode()
         params_list = []
-        for name in self.global_names + self.local_names:
-            params_list.append(
-                posterior_dict[name].reshape(num_samples, -1)
-            )
+        for name, (start, end) in self.slices:
+            # Extract component from dict and reshape correctly
+            # The slice (start, end) tells us how many dimensions this
+            # component should have in the flat representation
+            component = posterior_dict[name]
+            # Reshape to (num_samples, -1) to flatten all dimensions
+            # except the first (sample) dimension
+            component_flat = component.reshape(num_samples, -1)
+            params_list.append(component_flat)
 
         posterior_flat = jnp.concatenate(params_list, axis=1)
         posterior_samples = torch.from_numpy(
             np.array(posterior_flat)
         ).float()
 
+        # Apply inverse transform to get constrained space samples
+        if self.transforms is not None:
+            posterior_samples = self.transforms.inv(posterior_samples)
+
         return posterior_samples
 
     def log_prob(self, parameters):
         """Compute log probability at given parameters.
 
-        Note: TFMPE log probability computation is not currently
-        supported due to JAX tracing issues with stateful neural
-        network modules. Returns None.
+        Note: TFMPE log probability computation through the ODE solver
+        encounters JAX tracing issues with stateful neural network
+        modules (Flax NNX). This limitation is inherent to the current
+        TFMPE implementation. Returns None to indicate unavailability.
 
         Args:
             parameters: Flat tensor of shape (n_samples, n_params)
+                in constrained space
 
         Returns:
-            None (log probability computation not supported)
+            None (log probability computation not supported due to JAX
+            tracing constraints in stateful modules)
         """
         return None
 

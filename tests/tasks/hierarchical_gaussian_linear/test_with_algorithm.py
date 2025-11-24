@@ -85,13 +85,13 @@ def test_bottom_up_hierarchical_gaussian_linear(
     - Loads the task and observation
     - Runs TFMPE training
     - Returns samples with correct shape
-    - Returns execution time and metadata
+    - Returns num_simulations count and log_prob_true_params
     - Samples fall within prior bounds (global scale > 0)
     """
     task = HierarchicalGaussianLinear(n_l=5)
 
     # Run the algorithm
-    samples, execution_time, metadata = run_bottom_up(
+    samples, num_sims, log_prob_true_params, posterior = run_bottom_up(
         task=task,
         num_observation=num_observation,
         num_samples=num_samples,
@@ -103,14 +103,29 @@ def test_bottom_up_hierarchical_gaussian_linear(
     assert isinstance(samples, torch.Tensor)
     assert samples.shape == (num_samples, task.dim_parameters)
 
-    # Validate execution time was recorded
-    assert isinstance(execution_time, float)
-    assert execution_time > 0.0
+    # Validate num_simulations was recorded
+    assert isinstance(num_sims, int)
+    assert num_sims > 0
 
-    # Validate metadata
-    assert isinstance(metadata, dict)
-    assert "losses" in metadata
-    assert "n_samples_per_round" in metadata
+    # Validate log_prob_true_params
+    assert (log_prob_true_params is None or
+            isinstance(log_prob_true_params, torch.Tensor))
+
+    # Validate posterior object is returned
+    assert posterior is not None
+    assert hasattr(posterior, "sample")
+    assert hasattr(posterior, "log_prob")
+
+    # Test posterior.sample() returns correct shape
+    posterior_samples = posterior.sample((num_samples,))
+    assert posterior_samples.shape == (num_samples, task.dim_parameters)
+    assert not torch.isnan(posterior_samples).any()
+
+    # Test posterior.log_prob() works on samples
+    log_probs = posterior.log_prob(samples)
+    if log_probs is not None:
+        assert log_probs.shape == (num_samples,)
+        assert torch.isfinite(log_probs).all()
 
     # Validate samples are not NaN or Inf
     assert not torch.isnan(samples).any()
@@ -130,7 +145,7 @@ def test_bottom_up_hierarchical_gaussian_linear(
 
     log.info(
         f"TFMPE bottom-up completed on hierarchical_gaussian_linear:"
-        f"\n  Num simulations: {num_simulations}"
+        f"\n  Num simulations: {num_sims}"
         f"\n  Sample shape: {samples.shape}"
         f"\n  Global scale range: [{global_scale.min().item():.3f}, "
         f"{global_scale.max().item():.3f}]"
