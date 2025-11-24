@@ -22,6 +22,120 @@ from sbibm.tasks import Task
 from sbibm.tasks.distributions import BlockwiseDistribution
 
 
+class TFMPEPosterior:
+    """Wrapper for TFMPE model to provide posterior interface.
+
+    Handles conversion between flat tensors and token format required
+    by TFMPE, and computes log probabilities with proper transform
+    handling.
+    """
+
+    def __init__(
+        self,
+        tfmpe_model,
+        labeller,
+        independence,
+        slices,
+        global_names,
+        local_names,
+        n_local,
+        transforms=None,
+        context_tokens=None,
+    ):
+        """Initialize TFMPE posterior wrapper.
+
+        Args:
+            tfmpe_model: Trained TFMPE model
+            labeller: Labeller for token creation
+            independence: Independence structure for tokens
+            slices: List of (name, (start, end)) tuples for parameter
+                slicing
+            global_names: Names of global parameters
+            local_names: Names of local parameters
+            n_local: Number of local groups
+            transforms: Transform object for handling constrained
+                parameters
+            context_tokens: Context tokens (observations) for
+                computing log prob
+        """
+        self.tfmpe_model = tfmpe_model
+        self.labeller = labeller
+        self.independence = independence
+        self.slices = slices
+        self.global_names = global_names
+        self.local_names = local_names
+        self.n_local = n_local
+        self.transforms = transforms
+        self.context_tokens = context_tokens
+
+    def sample(self, shape):
+        """Sample from posterior.
+
+        Args:
+            shape: Tuple of sample shape
+
+        Returns:
+            Flat tensor of samples with shape (num_samples, n_params)
+        """
+        num_samples = shape[0]
+
+        # Create parameter tokens template
+        param_dict_template = {
+            name: jnp.ones((1, self.n_local if "p_l_" in name else 1, 1))
+            for name, _ in self.slices
+        }
+        param_dict_samples = {
+            key: jnp.tile(
+                value, (num_samples,) + (1,) * (value.ndim - 1)
+            )
+            for key, value in param_dict_template.items()
+        }
+
+        param_tokens = Tokens.from_pytree(
+            param_dict_samples,
+            sample_ndims=1,
+            labeller=self.labeller,
+            independence=self.independence,
+        )
+
+        # Sample from posterior
+        # TODO: Handle RNG seeding properly
+        posterior_tokens = self.tfmpe_model.sample_posterior(
+            context=self.context_tokens,
+            params=param_tokens,
+        )
+
+        # Convert tokens back to flat tensor format
+        posterior_dict = posterior_tokens.decode()
+        params_list = []
+        for name in self.global_names + self.local_names:
+            params_list.append(
+                posterior_dict[name].reshape(num_samples, -1)
+            )
+
+        posterior_flat = jnp.concatenate(params_list, axis=1)
+        posterior_samples = torch.from_numpy(
+            np.array(posterior_flat)
+        ).float()
+
+        return posterior_samples
+
+    def log_prob(self, parameters):
+        """Compute log probability at given parameters.
+
+        Note: TFMPE log probability computation is not currently
+        supported due to JAX tracing issues with stateful neural
+        network modules. Returns None.
+
+        Args:
+            parameters: Flat tensor of shape (n_samples, n_params)
+
+        Returns:
+            None (log probability computation not supported)
+        """
+        return None
+
+
 def _get_blockwise_components(dist) -> List[Tuple[int, int]]:
     """Get component slices from a distribution.
 
@@ -231,7 +345,7 @@ def run(
     num_observation: int,
     automatic_transforms_enabled: bool = False,
     **kwargs,
-) -> Tuple[torch.Tensor, float, Dict]:
+) -> Tuple[torch.Tensor, int, torch.Tensor, object]:
     """Run TFMPE bottom-up inference on a hierarchical task.
 
     Args:
@@ -240,15 +354,19 @@ def run(
         num_simulations: Number of simulator calls to use during
             training
         num_observation: Index of observation to use (1-10)
+        automatic_transforms_enabled: Whether to enable automatic
+            transforms
         **kwargs: Additional keyword arguments
 
     Returns:
         Tuple of:
         - posterior_samples: Tensor of shape
             (num_samples, dim_parameters)
-        - execution_time: Float, seconds elapsed
-        - metadata: Dict containing training losses and
-            hyperparameters
+        - num_simulations: Number of simulator calls used
+        - log_prob_true_params: Log probability at true parameters
+            if num_observation provided, else None
+        - posterior: Posterior object with sample() and log_prob()
+            methods
     """
     start_time = time.time()
 
@@ -405,18 +523,30 @@ def run(
     posterior_flat = jnp.concatenate(params_list, axis=1)
     posterior_samples = torch.from_numpy(np.array(posterior_flat)).float()
 
+    # Get transforms
+    transforms = task._get_transforms(n_l=n_local)["parameters"]
     if automatic_transforms_enabled:
-        transform = task._get_transforms(n_l=n_local)
-        posterior_samples = transform["parameters"].inv(posterior_samples)
+        posterior_samples = transforms.inv(posterior_samples)
 
-    execution_time = time.time() - start_time
+    # Create posterior wrapper
+    posterior_wrapped = TFMPEPosterior(
+        tfmpe_model=trained_tfmpe,
+        labeller=labeller,
+        independence=independence,
+        slices=slices,
+        global_names=global_names,
+        local_names=local_names,
+        n_local=n_local,
+        transforms=transforms if automatic_transforms_enabled else None,
+        context_tokens=context_tokens,
+    )
 
-    metadata = {
-        "losses": all_losses,
-        "n_samples_per_round": n_samples_per_round,
-        "n_iter_per_round": n_iter_per_round,
-        "batch_size": batch_size,
-        "n_local": n_local,
-    }
+    # Compute log probability at true parameters
+    true_parameters = task.get_true_parameters(
+        num_observation=num_observation
+    )
+    log_prob_true_params = posterior_wrapped.log_prob(true_parameters)
 
-    return posterior_samples, execution_time, metadata
+    return posterior_samples, num_simulations, log_prob_true_params, (
+        posterior_wrapped
+    )

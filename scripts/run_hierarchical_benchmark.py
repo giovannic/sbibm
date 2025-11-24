@@ -17,7 +17,6 @@ Example usage:
 """
 import argparse
 import logging
-import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -86,6 +85,8 @@ def run_benchmark(
         from sbibm.algorithms.sbi.snre import run as run_algorithm
     elif algorithm == "deepset":
         from sbibm.algorithms.deepset import run as run_algorithm
+    elif algorithm == "bottom_up":
+        from sbibm.algorithms.tfmpe.bottom_up import run as run_algorithm
     else:
         raise ValueError(
             f"Unknown algorithm: {algorithm}. "
@@ -210,7 +211,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         type=str,
-        choices=["snpe", "snle", "snre", "deepset"],
+        choices=["snpe", "snle", "snre", "deepset", "bottom_up"],
         required=True,
         help="Algorithm to use",
     )
