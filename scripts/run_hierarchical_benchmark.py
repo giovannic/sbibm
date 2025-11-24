@@ -126,14 +126,19 @@ def run_benchmark(
 
     # Reverse KL divergence
     log.info("Computing reverse KL divergence...")
-    rkl = reverse_kl(
-        posterior=posterior,
-        task=task,
-        num_observation=num_observation,
-        num_samples=num_samples,
-    )
-    results["reverse_kl"] = rkl.item()
-    log.info(f"Reverse KL: {rkl.item():.6f}")
+    # Some algorithms (like bottom_up) may not provide log_prob
+    if log_prob_true is not None:
+        rkl = reverse_kl(
+            posterior=posterior,
+            task=task,
+            num_observation=num_observation,
+            num_samples=num_samples,
+        )
+        results["reverse_kl"] = rkl.item()
+        log.info(f"Reverse KL: {rkl.item():.6f}")
+    else:
+        results["reverse_kl"] = float("nan")
+        log.warning("Algorithm does not provide log_prob, skipping reverse KL")
 
     # LC2ST
     log.info("Computing LC2ST...")
