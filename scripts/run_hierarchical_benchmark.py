@@ -75,6 +75,24 @@ def run_benchmark(
     log.info(f"Loading task: {task_name}")
     task = sbibm.get_task(task_name)
 
+    # Extract n_l for hierarchical tasks (reduce simulations for SNPE)
+    n_l = getattr(task, 'n_l', 1)
+    adjusted_num_simulations = num_simulations
+    if algorithm == "snpe" and n_l > 1:
+        n_sim_per_sample = n_l
+        adjusted_num_simulations = num_simulations // n_sim_per_sample
+        log.info(
+            f"Reducing SNPE simulations by factor of n_l={n_l}: "
+            f"{num_simulations} -> {adjusted_num_simulations}"
+        )
+    if algorithm == "deepset" and n_l > 1:
+        n_sim_per_sample = ((n_l + 1) // 2)
+        adjusted_num_simulations = num_simulations // n_sim_per_sample
+        log.info(
+            f"Reducing DeepSet simulations to account for set sampling: "
+            f"{num_simulations} -> {adjusted_num_simulations}"
+        )
+
     # Import algorithm
     log.info(f"Importing algorithm: {algorithm}")
     if algorithm == "snpe":
@@ -95,7 +113,7 @@ def run_benchmark(
 
     # Run algorithm
     log.info(
-        f"Running {algorithm} with {num_simulations} simulations "
+        f"Running {algorithm} with {adjusted_num_simulations} simulations "
         f"on observation {num_observation}"
     )
     start_time = time.time()
@@ -103,7 +121,7 @@ def run_benchmark(
     samples, actual_num_sims, log_prob_true, posterior = run_algorithm(
         task=task,
         num_samples=num_samples,
-        num_simulations=num_simulations,
+        num_simulations=adjusted_num_simulations,
         num_observation=num_observation,
         **algorithm_kwargs,
     )
