@@ -1,2 +1,0 @@
-task,algorithm,num_simulations,num_observation,elapsed_time,seed,reverse_kl,lc2st_p_value,lc2st_test_statistic,lc2st_reject
-hierarchical_gaussian_linear,deepset,100,1,3.3061490058898926,42,,0.20999999344348907,0.001407825737260282,False
