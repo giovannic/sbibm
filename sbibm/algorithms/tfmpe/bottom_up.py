@@ -19,7 +19,7 @@ from tfmpe.preprocessing.utils import Independence, Labeller
 
 from sbibm.algorithms.sbi.utils import wrap_prior_dist
 from sbibm.tasks import Task
-from sbibm.tasks.distributions import BlockwiseDistribution
+from sbibm.tasks.distributions import BlockwiseDistribution, SummedStackTransform
 
 
 class TFMPEPosterior:
@@ -333,15 +333,46 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False):
             for name, _ in slices
             if str.startswith(name, "p_g_")
         ]
-        global_params = jnp.concatenate(global_list, axis=1)
+        global_params_unconstrained = jnp.concatenate(global_list, axis=1)
 
-        # Convert to torch and use prior_dist's local_dist_fn
-        global_torch = torch.from_numpy(np.array(global_params)).float()
-        local_dist = prior_dist.local_dist_fn(global_torch, n)
-        local_torch = local_dist.sample().reshape(global_torch.shape[0], -1)
+        # Convert to torch
+        global_torch_unconstrained = (
+            torch.from_numpy(np.array(global_params_unconstrained)).float()
+        )
 
-        samples = torch.cat([global_torch, local_torch], 1)
+        # Apply global transform if enabled (convert unconstrained to
+        # constrained)
+        if automatic_transforms_enabled:
+            transforms_full = task._get_transforms(n_l=n)
+            transform_full = transforms_full["parameters"]
+            # Get base transform from Inverse wrapper
+            base_transform = transform_full._inv
+            # Extract just the global part of the transform
+            global_dim = global_torch_unconstrained.shape[1]
+            global_transforms_list = base_transform.transforms[:global_dim]
+            # Create new SummedStackTransform with just global
+            global_transform = SummedStackTransform(
+                global_transforms_list, dim=-1
+            )
+            # Apply forward to convert unconstrained global to constrained
+            global_torch_constrained = global_transform(
+                global_torch_unconstrained
+            )
+        else:
+            global_torch_constrained = global_torch_unconstrained
 
+        # Sample local parameters conditioned on constrained global
+        local_dist = prior_dist.local_dist_fn(
+            global_torch_constrained, n
+        )
+        local_torch = local_dist.sample().reshape(
+            global_torch_constrained.shape[0], -1
+        )
+
+        # Combine global (constrained) and local (constrained)
+        samples = torch.cat([global_torch_constrained, local_torch], 1)
+
+        # Apply full transform if NOT already applied to global
         if automatic_transforms_enabled:
             transforms = task._get_transforms(n_l=n)
             samples = transforms["parameters"](samples)
