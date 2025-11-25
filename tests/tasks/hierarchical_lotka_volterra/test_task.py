@@ -1,3 +1,7 @@
+import diffrax
+import jax
+import jax.numpy as jnp
+import numpy
 import pyro
 import pytest
 import torch
@@ -30,8 +34,7 @@ def test_prior_no_nan(n_l):
 
     samples = prior(num_samples=1000)
 
-    assert not torch.isnan(samples).any()
-    assert not torch.isinf(samples).any()
+    assert torch.isfinite(samples).all()
 
 
 @pytest.mark.parametrize("n_l", [3, 5])
@@ -61,8 +64,9 @@ def test_simulator_no_nan(n_l):
     observations = simulator(parameters)
 
     # Allow small fraction of NaN due to ODE failures
-    nan_fraction = torch.isnan(observations).any(dim=1).float().mean()
-    assert nan_fraction < 0.1, f"Too many NaN values: {nan_fraction:.2%}"
+    fin_fraction = torch.isfinite(observations).all(dim=1).float().mean()
+    inf_fraction = 1 - fin_fraction
+    assert inf_fraction < 0.1, f"Too many inf values: {inf_fraction:.2%}"
 
 
 def test_prior_structure():
@@ -144,3 +148,84 @@ def test_reference_posterior_not_implemented():
 
     with pytest.raises(NotImplementedError):
         task._sample_reference_posterior(num_samples=100, num_observation=1)
+
+
+@pytest.mark.parametrize("n_l", [2, 3])
+def test_vmap_vs_sequential_ode_solving(n_l):
+    """Test that vmap ODE solving matches sequential solving.
+
+    This test verifies that the vmapped ODE solver produces identical
+    results to solving each (sample, site) pair independently in a loop.
+
+    Args:
+        n_l: Number of local contexts/sites
+    """
+    task = HierarchicalLotkaVolterra(n_l=n_l)
+    prior = task.get_prior()
+
+    # Use small num_samples for speed
+    num_samples = 2
+    parameters = prior(num_samples=num_samples)
+
+    # Extract local parameters (skip global hyperpriors)
+    local_params = parameters[:, 8:]  # (num_samples, 4*n_l)
+    local_reshaped = local_params.reshape(num_samples, n_l, 4)
+
+    # Convert to JAX arrays
+    alpha_jax = jnp.array(local_reshaped[:, :, 0].numpy())
+    beta_jax = jnp.array(local_reshaped[:, :, 1].numpy())
+    gamma_jax = jnp.array(local_reshaped[:, :, 2].numpy())
+    delta_jax = jnp.array(local_reshaped[:, :, 3].numpy())
+
+    # Method 1: Sequential solving (reference, in JAX)
+    def solve_sequential_jax():
+        trajectories_sequential = []
+        for i in range(num_samples):
+            sample_trajectories = []
+
+            for j in range(n_l):
+                alpha = alpha_jax[i, j]
+                beta = beta_jax[i, j]
+                gamma = gamma_jax[i, j]
+                delta = delta_jax[i, j]
+
+                # Solve single (sample, site) pair using JAX function
+                traj_jax = task._solve_ode_single_site_jax(
+                    alpha, beta, gamma, delta
+                )
+                sample_trajectories.append(traj_jax)
+
+            # Stack sites: (n_l, 2, timepoints)
+            sample_traj = jnp.stack(sample_trajectories, axis=0)
+            trajectories_sequential.append(sample_traj)
+
+        # Stack samples: (num_samples, n_l, 2, timepoints)
+        return jnp.stack(trajectories_sequential, axis=0)
+
+    # Method 2: Vmapped solving (in JAX)
+    def solve_vmapped_jax():
+        return task._solve_ode_trajectories_jax(alpha_jax, beta_jax, gamma_jax, delta_jax)
+
+    # Get results in JAX
+    traj_seq_jax = solve_sequential_jax()
+    traj_vmap_jax = solve_vmapped_jax()
+
+    # Convert to numpy for comparison
+    traj_seq = numpy.asarray(traj_seq_jax)
+    traj_vmap = numpy.asarray(traj_vmap_jax)
+
+    # Verify shapes match
+    assert traj_seq.shape == traj_vmap.shape, (
+        f"Shape mismatch: sequential {traj_seq.shape} "
+        f"vs vmapped {traj_vmap.shape}"
+    )
+
+    # Verify results are similar (allowing for ODE solver differences)
+    # ODE solvers with adaptive stepping can take different numerical paths
+    # depending on how the computation is batched. Both solve the same ODE.
+    assert numpy.allclose(
+        traj_seq, traj_vmap, rtol=1e-2, atol=1.0
+    ), (
+        f"Trajectories differ beyond tolerance. "
+        f"Max difference: {numpy.abs(traj_seq - traj_vmap).max()}"
+    )

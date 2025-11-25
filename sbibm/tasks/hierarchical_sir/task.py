@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import diffrax
+import jax
 import jax.numpy as jnp
 import numpy
 import pyro
@@ -150,6 +151,30 @@ class HierarchicalSIR(Task):
         # Initial conditions per region
         self.u0 = torch.tensor([N - I0 - R0, I0, R0])
 
+    def _sir_ode_func_single(
+        self, t: jnp.ndarray, u: jnp.ndarray, args
+    ) -> jnp.ndarray:
+        """SIR ODE function for single (sample, region) pair.
+
+        Args:
+            t: Time (scalar)
+            u: State vector shape (3,) with [S, I, R]
+            args: Tuple of (gamma, beta) scalars
+
+        Returns:
+            du/dt: State derivatives shape (3,)
+        """
+        S = u[0]
+        I = u[1]
+        gamma = args[0]
+        beta = args[1]
+
+        dS = -beta * S * I / self.N
+        dI = beta * S * I / self.N - gamma * I
+        dR = gamma * I
+
+        return jnp.array([dS, dI, dR])
+
     def _sir_ode_func(
         self, t: jnp.ndarray, u: jnp.ndarray, args
     ) -> jnp.ndarray:
@@ -176,12 +201,79 @@ class HierarchicalSIR(Task):
 
         return jnp.stack([dS, dI, dR], axis=1)
 
-    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
-        """Solve hierarchical SIR ODE for batched parameters.
+    def _solve_ode_single_site_jax(
+        self, gamma: jnp.ndarray, beta: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Solve SIR ODE for a single (sample, region) pair in JAX.
 
-        For each sample, we have global gamma and n_local betas.
-        We flatten to (num_samples * n_local,) batch dimension for
-        Diffrax vectorization.
+        Args:
+            gamma: Recovery rate (JAX scalar)
+            beta: Transmission rate (JAX scalar)
+
+        Returns:
+            Trajectory array shape (3, num_timepoints) in JAX
+        """
+        t_save = torch.linspace(
+            0, self.days, int(self.days / self.saveat) + 1
+        )
+        t_save_jax = jnp.array(t_save.numpy())
+
+        # Initial conditions
+        u0 = jnp.array(self.u0.numpy(), dtype=jnp.float32)
+
+        # ODE term
+        vector_field = diffrax.ODETerm(self._sir_ode_func_single)
+
+        # Solve ODE
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.1,
+            y0=u0,
+            args=jnp.array([gamma, beta]),
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
+
+        # Permute to (3, timepoints)
+        return solution.ys.T
+
+    def _solve_ode_trajectories_jax(
+        self, gamma_jax: jnp.ndarray, beta_jax: jnp.ndarray
+    ) -> jnp.ndarray:
+        """Solve hierarchical SIR ODE using vmapped solver in JAX.
+
+        All computation stays in JAX land. Caller converts torch to/from JAX.
+
+        Args:
+            gamma_jax: JAX array shape (num_samples,)
+            beta_jax: JAX array shape (num_samples, n_local)
+
+        Returns:
+            Trajectories in JAX shape (num_samples, n_local, 3, num_timepoints)
+        """
+        # Create vmapped solver: vmap over sites (axis 1) of beta
+        solve_vmap_sites = jax.vmap(
+            self._solve_ode_single_site_jax, in_axes=(None, 0)
+        )
+
+        # Create vmapped solver over samples: vmap over both gamma and beta
+        solve_vmap_both = jax.vmap(
+            solve_vmap_sites, in_axes=(0, 0)
+        )
+
+        # Solve all ODE systems (stays in JAX)
+        trajectories_jax = solve_vmap_both(gamma_jax, beta_jax)
+
+        return trajectories_jax
+
+    def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
+        """Solve hierarchical SIR ODE using vmapped solver.
+
+        Solves ODE for each (sample, region) pair independently using
+        JAX's vmap for vectorization.
 
         Args:
             parameters: Shape (num_samples, 1 + n_local) with
@@ -193,63 +285,30 @@ class HierarchicalSIR(Task):
         num_samples = parameters.shape[0]
         # Infer n_local from parameter shape
         n_local = parameters.shape[1] - 1
-        t_save = torch.linspace(
-            0, self.days, int(self.days / self.saveat) + 1
-        )
 
         # Extract gamma and beta for each sample
         gamma = parameters[:, 0]  # (num_samples,)
         beta = parameters[:, 1:]  # (num_samples, n_local)
 
-        # Create flattened batch: (num_samples * n_local,)
-        # Repeat gamma for each region
-        gamma_expanded = gamma.repeat_interleave(n_local)
-        beta_flat = beta.reshape(-1)
+        # Convert to JAX arrays
+        gamma_jax = jnp.array(gamma.numpy())  # (num_samples,)
+        beta_jax = jnp.array(beta.numpy())  # (num_samples, n_local)
 
-        # Stack into args format: (num_samples * n_local, 2)
-        params_jax = jnp.stack(
-            [gamma_expanded.numpy(), beta_flat.numpy()], axis=1
-        )
-
-        # Initial conditions for all batch elements
-        u0_batch = jnp.tile(
-            jnp.array(self.u0.numpy()),
-            (num_samples * n_local, 1),
-        )
-        t_save_jax = jnp.array(t_save.numpy())
-
-        # Define ODE term
-        vector_field = diffrax.ODETerm(self._sir_ode_func)
-
-        # Solve ODE for all (sample, region) pairs in batch
-        solution = diffrax.diffeqsolve(
-            vector_field,
-            diffrax.Dopri5(),
-            t0=t_save_jax[0],
-            t1=t_save_jax[-1],
-            dt0=0.1,
-            y0=u0_batch,
-            args=params_jax,
-            saveat=diffrax.SaveAt(ts=t_save_jax),
-            max_steps=16**5,
+        # Solve in JAX
+        trajectories_jax = self._solve_ode_trajectories_jax(
+            gamma_jax, beta_jax
         )
 
         # Convert back to PyTorch
-        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories_np = numpy.asarray(trajectories_jax).copy()
         trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
 
-        # Permute from (num_timepoints, num_samples*n_local, 3) to
-        # (num_samples*n_local, 3, num_timepoints)
-        trajectories = trajectories.permute(1, 2, 0)
-
-        # Reshape to (num_samples, n_local, 3, num_timepoints)
+        # Verify shape and handle NaN from failed ODE solves
         expected_shape = torch.Size(
-            [num_samples * n_local, 3, int(self.dim_data_raw / 3)]
+            [num_samples, n_local, 3, int(self.dim_data_raw / 3)]
         )
         if trajectories.shape != expected_shape:
             trajectories = float("nan") * torch.ones(expected_shape)
-
-        trajectories = trajectories.reshape(num_samples, n_local, 3, -1)
 
         return trajectories.float()
 

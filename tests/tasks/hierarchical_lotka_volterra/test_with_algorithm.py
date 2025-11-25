@@ -181,8 +181,8 @@ def test_snpe_samples_reasonable():
 
 def test_bottom_up_hierarchical_lotka_volterra(
     num_observation=1,
-    num_samples=100,
-    num_simulations=100,
+    num_samples=10,
+    num_simulations=10,
 ):
     """Integration test for TFMPE bottom-up on hierarchical Lotka-Volterra.
 

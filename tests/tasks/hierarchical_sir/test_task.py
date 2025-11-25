@@ -1,3 +1,7 @@
+import diffrax
+import jax
+import jax.numpy as jnp
+import numpy
 import pyro
 import pytest
 import torch
@@ -146,3 +150,80 @@ def test_get_prior_dist():
     # Test sampling from returned distribution
     samples = prior_dist.sample((10,))
     assert samples.shape == (10, 4)  # 1 global + 3 local
+
+
+@pytest.mark.parametrize("n_l", [1, 3, 5])
+def test_vmap_vs_sequential_ode_solving(n_l):
+    """Test that vmap ODE solving matches sequential solving.
+
+    This test verifies that the vmapped ODE solver produces identical
+    results to solving each (sample, site) pair independently in a loop.
+
+    Args:
+        n_l: Number of local contexts/regions
+    """
+    task = HierarchicalSIR(n_l=n_l)
+    prior = task.get_prior()
+
+    # Use small num_samples for speed
+    num_samples = 2
+    parameters = prior(num_samples=num_samples)
+
+    # Extract parameters
+    gamma = parameters[:, 0]  # (num_samples,)
+    beta = parameters[:, 1:]  # (num_samples, n_l)
+
+    # Convert to JAX arrays
+    gamma_jax = jnp.array(gamma.numpy())
+    beta_jax = jnp.array(beta.numpy())
+
+    # Method 1: Sequential solving (reference, in JAX)
+    def solve_sequential_jax():
+        trajectories_sequential = []
+        for i in range(num_samples):
+            gamma_i = gamma_jax[i]
+            beta_i = beta_jax[i, :]  # (n_l,)
+            sample_trajectories = []
+
+            for j in range(n_l):
+                gamma_ij = gamma_i
+                beta_ij = beta_i[j]
+
+                # Solve single (sample, site) pair using JAX function
+                traj_jax = task._solve_ode_single_site_jax(gamma_ij, beta_ij)
+                sample_trajectories.append(traj_jax)
+
+            # Stack sites: (n_l, 3, timepoints)
+            sample_traj = jnp.stack(sample_trajectories, axis=0)
+            trajectories_sequential.append(sample_traj)
+
+        # Stack samples: (num_samples, n_l, 3, timepoints)
+        return jnp.stack(trajectories_sequential, axis=0)
+
+    # Method 2: Vmapped solving (in JAX)
+    def solve_vmapped_jax():
+        return task._solve_ode_trajectories_jax(gamma_jax, beta_jax)
+
+    # Get results in JAX
+    traj_seq_jax = solve_sequential_jax()
+    traj_vmap_jax = solve_vmapped_jax()
+
+    # Convert to numpy for comparison
+    traj_seq = numpy.asarray(traj_seq_jax)
+    traj_vmap = numpy.asarray(traj_vmap_jax)
+
+    # Verify shapes match
+    assert traj_seq.shape == traj_vmap.shape, (
+        f"Shape mismatch: sequential {traj_seq.shape} "
+        f"vs vmapped {traj_vmap.shape}"
+    )
+
+    # Verify results are similar (allowing for ODE solver differences)
+    # ODE solvers with adaptive stepping can take different numerical paths
+    # depending on how the computation is batched. Both solve the same ODE.
+    assert numpy.allclose(
+        traj_seq, traj_vmap, rtol=1e-2, atol=1.0
+    ), (
+        f"Trajectories differ beyond tolerance. "
+        f"Max difference: {numpy.abs(traj_seq - traj_vmap).max()}"
+    )

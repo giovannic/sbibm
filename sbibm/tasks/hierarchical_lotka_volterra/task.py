@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import diffrax
+import jax
 import jax.numpy as jnp
 import numpy
 import pyro
@@ -165,6 +166,31 @@ class HierarchicalLotkaVolterra(Task):
         # Initial conditions for ODE
         self.u0 = torch.tensor([30.0, 1.0])
 
+    def _lotka_volterra_ode_func_single(
+        self, t: jnp.ndarray, u: jnp.ndarray, args
+    ) -> jnp.ndarray:
+        """Lotka-Volterra ODE function for single (sample, site) pair.
+
+        Args:
+            t: Time (scalar)
+            u: State vector shape (2,) with [prey, predator]
+            args: Tuple of (alpha, beta, gamma, delta) scalars
+
+        Returns:
+            du/dt: State derivatives shape (2,)
+        """
+        x = u[0]
+        y = u[1]
+        alpha = args[0]
+        beta = args[1]
+        gamma = args[2]
+        delta = args[3]
+
+        dx = alpha * x - beta * x * y
+        dy = -gamma * y + delta * x * y
+
+        return jnp.array([dx, dy])
+
     def _lotka_volterra_ode_func(
         self, t: jnp.ndarray, u: jnp.ndarray, args
     ) -> jnp.ndarray:
@@ -194,18 +220,96 @@ class HierarchicalLotkaVolterra(Task):
 
         return jnp.stack([dx, dy], axis=1)
 
+    def _solve_ode_single_site_jax(
+        self,
+        alpha: jnp.ndarray,
+        beta: jnp.ndarray,
+        gamma: jnp.ndarray,
+        delta: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Solve LV ODE for a single (sample, site) pair in JAX.
+
+        Args:
+            alpha, beta, gamma, delta: JAX scalars (Lotka-Volterra params)
+
+        Returns:
+            Trajectory array shape (2, num_timepoints) in JAX
+            Returns NaN array if ODE solving fails
+        """
+        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
+        t_save_jax = jnp.array(t_save.numpy())
+        num_timepoints = len(t_save_jax)
+
+        # Initial conditions
+        u0 = jnp.array(self.u0.numpy(), dtype=jnp.float32)
+
+        # ODE term
+        vector_field = diffrax.ODETerm(self._lotka_volterra_ode_func_single)
+
+        # Solve ODE
+        solution = diffrax.diffeqsolve(
+            vector_field,
+            diffrax.Dopri5(),
+            t0=t_save_jax[0],
+            t1=t_save_jax[-1],
+            dt0=0.01,
+            y0=u0,
+            args=jnp.array([alpha, beta, gamma, delta]),
+            saveat=diffrax.SaveAt(ts=t_save_jax),
+            max_steps=16**5,
+        )
+
+        # Permute to (2, timepoints)
+        return solution.ys.T
+
+    def _solve_ode_trajectories_jax(
+        self,
+        alpha_jax: jnp.ndarray,
+        beta_jax: jnp.ndarray,
+        gamma_jax: jnp.ndarray,
+        delta_jax: jnp.ndarray,
+    ) -> jnp.ndarray:
+        """Solve hierarchical LV ODE using vmapped solver in JAX.
+
+        All computation stays in JAX land. Caller converts torch to/from JAX.
+
+        Args:
+            alpha_jax, beta_jax, gamma_jax, delta_jax: JAX arrays
+                shape (num_samples, n_l)
+
+        Returns:
+            Trajectories in JAX shape (num_samples, n_l, 2, num_timepoints)
+        """
+        # Create vmapped solver: vmap over sites (axis 1)
+        solve_vmap_sites = jax.vmap(
+            self._solve_ode_single_site_jax, in_axes=(0, 0, 0, 0)
+        )
+
+        # Create vmapped solver over samples
+        solve_vmap_both = jax.vmap(
+            solve_vmap_sites, in_axes=(0, 0, 0, 0)
+        )
+
+        # Solve all ODE systems (stays in JAX)
+        trajectories_jax = solve_vmap_both(
+            alpha_jax,
+            beta_jax,
+            gamma_jax,
+            delta_jax
+        )
+
+        return trajectories_jax
+
     def solve_ode_trajectories(self, parameters: torch.Tensor) -> torch.Tensor:
-        """Solve hierarchical LV ODE for batched parameters.
+        """Solve hierarchical LV ODE using vmapped solver.
+
+        Solves ODE for each (sample, site) pair independently using
+        JAX's vmap for vectorization.
 
         Parameters are structured as:
-        - [:, 0:8]: global hyperprior params [mu_alpha, mu_beta,
-          mu_gamma, mu_delta, sigma_alpha, sigma_beta, sigma_gamma,
-          sigma_delta]
+        - [:, 0:8]: global hyperprior params (not used for ODE solving)
         - [:, 8:]: local params [alpha_1, beta_1, gamma_1, delta_1,
           ..., alpha_n_l, beta_n_l, gamma_n_l, delta_n_l]
-
-        We expand this to (num_samples * n_l, 4) with [alpha_i,
-        beta_i, gamma_i, delta_i] for each batch element.
 
         Args:
             parameters: Shape (num_samples, 8 + 4*n_l)
@@ -214,7 +318,6 @@ class HierarchicalLotkaVolterra(Task):
             Trajectories shape (num_samples, n_l, 2, num_timepoints)
         """
         num_samples = parameters.shape[0]
-        t_save = torch.linspace(0, self.days, int(self.days / self.saveat) + 1)
 
         # Extract local parameters
         local_params = parameters[:, 8:]  # (num_samples, 4*n_l)
@@ -226,64 +329,27 @@ class HierarchicalLotkaVolterra(Task):
         # where each site has [alpha_i, beta_i, gamma_i, delta_i]
         local_reshaped = local_params.reshape(num_samples, n_l, 4)
 
-        # Create flattened batch: (num_samples * n_l, 4)
-        # For each (sample, site) pair, we need [alpha, beta,
-        # gamma, delta]
-        alpha_flat = local_reshaped[:, :, 0].reshape(-1)
-        beta_flat = local_reshaped[:, :, 1].reshape(-1)
-        gamma_flat = local_reshaped[:, :, 2].reshape(-1)
-        delta_flat = local_reshaped[:, :, 3].reshape(-1)
+        # Convert to JAX arrays
+        alpha = jnp.array(local_reshaped[:, :, 0].numpy())
+        beta = jnp.array(local_reshaped[:, :, 1].numpy())
+        gamma = jnp.array(local_reshaped[:, :, 2].numpy())
+        delta = jnp.array(local_reshaped[:, :, 3].numpy())
 
-        # Stack into args format: (num_samples * n_l, 4)
-        params_jax = jnp.stack(
-            [
-                alpha_flat.numpy(),
-                beta_flat.numpy(),
-                gamma_flat.numpy(),
-                delta_flat.numpy(),
-            ],
-            axis=1,
-        )
-
-        # Initial conditions for all batch elements
-        u0_batch = jnp.tile(
-            jnp.array(self.u0.numpy()),
-            (num_samples * n_l, 1),
-        )
-        t_save_jax = jnp.array(t_save.numpy())
-
-        # Define ODE term
-        vector_field = diffrax.ODETerm(self._lotka_volterra_ode_func)
-
-        # Solve ODE for all (sample, site) pairs in batch
-        solution = diffrax.diffeqsolve(
-            vector_field,
-            diffrax.Dopri5(),
-            t0=t_save_jax[0],
-            t1=t_save_jax[-1],
-            dt0=0.01,
-            y0=u0_batch,
-            args=params_jax,
-            saveat=diffrax.SaveAt(ts=t_save_jax),
-            max_steps=16**5,
+        # Solve in JAX
+        trajectories_jax = self._solve_ode_trajectories_jax(
+            alpha, beta, gamma, delta
         )
 
         # Convert back to PyTorch
-        trajectories_np = numpy.asarray(solution.ys).copy()
+        trajectories_np = numpy.asarray(trajectories_jax).copy()
         trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
 
-        # Permute from (num_timepoints, num_samples*n_l, 2) to
-        # (num_samples*n_l, 2, num_timepoints)
-        trajectories = trajectories.permute(1, 2, 0)
-
-        # Reshape to (num_samples, n_l, 2, num_timepoints)
+        # Verify shape and handle NaN from failed ODE solves
         expected_shape = torch.Size(
-            [num_samples * n_l, 2, int(self.days / self.saveat) + 1]
+            [num_samples, n_l, 2, int(self.days / self.saveat) + 1]
         )
         if trajectories.shape != expected_shape:
             trajectories = float("nan") * torch.ones(expected_shape)
-
-        trajectories = trajectories.reshape(num_samples, n_l, 2, -1)
 
         return trajectories.float()
 
