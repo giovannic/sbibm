@@ -19,7 +19,6 @@ class HierarchicalGaussianLinear(Task):
     def __init__(
         self,
         n_l: int = 5,
-        dim: int = 26,
         prior_scale: float = 0.1,
         simulator_scale: float = 0.1,
     ):
@@ -48,27 +47,17 @@ class HierarchicalGaussianLinear(Task):
 
         Args:
             n_l: Number of local contexts (default: 5)
-            dim: Total dimensionality of parameter space (default: 26,
-                which with default n_l=5 gives 1 + 5*5 = 26)
             prior_scale: Standard deviation of prior on local means (default:
                 0.1)
             simulator_scale: Scale parameter for HalfNormal prior on global
                 noise scale (default: 0.1)
-
-        Raises:
-            ValueError: If (dim - 1) does not divide evenly by n_l
         """
         self.n_l = n_l
         self.prior_scale = prior_scale
         self.simulator_scale = simulator_scale
 
         # Calculate dimensions: 1 global scale + n_l * dim_local_per_context locals
-        if (dim - 1) % n_l != 0:
-            raise ValueError(
-                f"(dim - 1) = {dim - 1} must be divisible by n_l = {n_l}. "
-                f"Suggested values: {1 + n_l * ((dim - 1) // n_l)}, "
-                f"{1 + n_l * ((dim - 1) // n_l + 1)}"
-            )
+        dim = n_l + 1
 
         dim_global = 1
         dim_local_per_context = (dim - 1) // n_l
@@ -329,5 +318,18 @@ class HierarchicalGaussianLinear(Task):
 
 
 if __name__ == "__main__":
-    task = HierarchicalGaussianLinear(n_l=5)
-    task._setup(n_jobs=4, create_reference=False)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Setup hierarchical gaussian linear task"
+    )
+    parser.add_argument(
+        "--n_l",
+        type=int,
+        default=5,
+        help="Number of local contexts",
+    )
+    args = parser.parse_args()
+
+    task = HierarchicalGaussianLinear(n_l=args.n_l)
+    task._setup(n_jobs=1, create_reference=False)

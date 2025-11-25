@@ -64,14 +64,7 @@ class HierarchicalGaussianLinearUniform(Task):
         self.prior_bound = prior_bound
         self.simulator_scale = simulator_scale
 
-        # Calculate dimensions: 1 global scale + n_l * dim_local_per_context
-        # locals
-        if (dim - 1) % n_l != 0:
-            raise ValueError(
-                f"(dim - 1) = {dim - 1} must be divisible by n_l = {n_l}. "
-                f"Suggested values: {1 + n_l * ((dim - 1) // n_l)}, "
-                f"{1 + n_l * ((dim - 1) // n_l + 1)}"
-            )
+        dim = n_l + 1
 
         dim_global = 1
         dim_local_per_context = (dim - 1) // n_l
@@ -331,5 +324,18 @@ class HierarchicalGaussianLinearUniform(Task):
 
 
 if __name__ == "__main__":
-    task = HierarchicalGaussianLinearUniform(n_l=5)
-    task._setup(n_jobs=4, create_reference=False)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Setup hierarchical gaussian linear uniform task"
+    )
+    parser.add_argument(
+        "--n_l",
+        type=int,
+        default=5,
+        help="Number of local contexts",
+    )
+    args = parser.parse_args()
+
+    task = HierarchicalGaussianLinearUniform(n_l=args.n_l)
+    task._setup(n_jobs=1, create_reference=False)

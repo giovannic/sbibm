@@ -1,13 +1,18 @@
 #!/bin/bash
 
-# Default device
+# Default values
 DEVICE="cpu"
+N_L=5
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
   case $1 in
     --device)
       DEVICE="$2"
+      shift 2
+      ;;
+    --n_l)
+      N_L="$2"
       shift 2
       ;;
     *)
@@ -30,6 +35,25 @@ TASKS=(
 
 ALGORITHMS=("bottom_up" "snpe" "deepset")
 
+echo "Device: $DEVICE"
+echo "n_l (local contexts): $N_L"
+echo ""
+
+# Regenerate observations if n_l != 5
+if [[ $N_L -ne 5 ]]; then
+  echo "Regenerating observations for n_l=$N_L..."
+  for TASK in "${TASKS[@]}"; do
+    echo "Regenerating observations for task: $TASK with n_l=$N_L"
+    python sbibm/tasks/"$TASK"/task.py --n_l "$N_L"
+    if [[ $? -ne 0 ]]; then
+      echo "Error regenerating observations for $TASK"
+      exit 1
+    fi
+  done
+  echo "Observation regeneration completed!"
+  echo ""
+fi
+
 echo "Running benchmarks with device: $DEVICE"
 
 for ALGORITHM in "${ALGORITHMS[@]}"; do
@@ -42,6 +66,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_observation 1 \
       --output_dir test_results \
       --device "$DEVICE" \
+      --n_l "$N_L" \
       --seed 42 \
       --num_samples 100
 
@@ -52,6 +77,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_observation 1 \
       --output_dir test_results \
       --device "$DEVICE" \
+      --n_l "$N_L" \
       --seed 42 \
       --num_samples 100
 
@@ -62,6 +88,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --num_observation 1 \
       --output_dir test_results \
       --device "$DEVICE" \
+      --n_l "$N_L" \
       --seed 42 \
       --num_samples 100
 

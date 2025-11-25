@@ -47,6 +47,7 @@ def run_benchmark(
     output_dir: Path,
     seed: Optional[int] = None,
     num_samples: int = 1000,
+    n_l: int = 5,
     **algorithm_kwargs,
 ) -> Dict:
     """Run a single benchmark experiment.
@@ -59,6 +60,7 @@ def run_benchmark(
         output_dir: Directory to save results
         seed: Random seed for reproducibility
         num_samples: Number of posterior samples for metrics
+        n_l: Number of local contexts (for hierarchical tasks)
         **algorithm_kwargs: Additional kwargs for the algorithm
 
     Returns:
@@ -72,8 +74,8 @@ def run_benchmark(
         log.info(f"Set random seed to {seed}")
 
     # Load task
-    log.info(f"Loading task: {task_name}")
-    task = sbibm.get_task(task_name)
+    log.info(f"Loading task: {task_name} with n_l={n_l}")
+    task = sbibm.get_task(task_name, n_l=n_l)
 
     # Extract n_l for hierarchical tasks (reduce simulations for SNPE)
     n_l = getattr(task, 'n_l', 1)
@@ -281,6 +283,12 @@ def main():
         help="Device to run on (cpu, cuda, cuda:0, cuda:1, etc.)",
     )
     parser.add_argument(
+        "--n_l",
+        type=int,
+        default=5,
+        help="Number of local contexts (for hierarchical tasks)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
@@ -302,6 +310,7 @@ def main():
     log.info(f"Output directory: {args.output_dir}")
     log.info(f"Seed: {args.seed}")
     log.info(f"Device: {args.device}")
+    log.info(f"n_l (local contexts): {args.n_l}")
     log.info("=" * 80)
 
     # Run benchmark
@@ -313,6 +322,7 @@ def main():
         output_dir=Path(args.output_dir),
         seed=args.seed,
         num_samples=args.num_samples,
+        n_l=args.n_l,
         num_rounds=args.num_rounds,
         device=args.device,
         automatic_transforms_enabled=True,

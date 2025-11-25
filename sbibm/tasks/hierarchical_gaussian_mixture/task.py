@@ -356,5 +356,18 @@ class HierarchicalGaussianMixture(Task):
 
 
 if __name__ == "__main__":
-    task = HierarchicalGaussianMixture(n_l=5)
-    task._setup(n_jobs=4, create_reference=False)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Setup hierarchical gaussian mixture task"
+    )
+    parser.add_argument(
+        "--n_l",
+        type=int,
+        default=5,
+        help="Number of local contexts",
+    )
+    args = parser.parse_args()
+
+    task = HierarchicalGaussianMixture(n_l=args.n_l)
+    task._setup(n_jobs=1, create_reference=False)
