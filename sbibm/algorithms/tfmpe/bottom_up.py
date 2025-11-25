@@ -85,9 +85,9 @@ class TFMPEPosterior:
         for name, (start, end) in self.slices:
             event_dim = end - start
             if name.startswith("p_l_"):
-                # Local params: (1, n_local, event_dim, 1)
+                # Local params: (1, n_local, event_dim // n_local, 1)
                 param_dict_template[name] = jnp.ones(
-                    (1, self.n_local, event_dim, 1)
+                    (1, self.n_local, event_dim // self.n_local, 1)
                 )
             else:
                 # Global params: (1, event_dim, 1)
