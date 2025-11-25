@@ -101,25 +101,25 @@ class HierarchicalGaussianMixture(Task):
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
-        def local_dist_fn(global_params):
+        def local_dist_fn(global_params, n_local_arg):
             # global_params shape: [..., 2*dim]
             # Extract locs and scales
             locs = global_params[..., :dim]  # [..., dim]
             scales = global_params[..., dim : 2 * dim]  # noqa: E203 [..., dim]
 
-            # Create distribution for all local params (dim*n_l dims)
+            # Create distribution for all local params (dim*n_local_arg dims)
             # Each local param (dim-D) is TruncatedNormal with bounded support
-            # Replicate locs and scales for n_l contexts
+            # Replicate locs and scales for n_local_arg contexts
             batch_shape = global_params.shape[:-1]
             locs_expanded = (
                 locs.unsqueeze(-2)
-                .expand(list(batch_shape) + [n_l, dim])
-                .reshape(list(batch_shape) + [dim * n_l])
+                .expand(list(batch_shape) + [n_local_arg, dim])
+                .reshape(list(batch_shape) + [dim * n_local_arg])
             )
             scales_expanded = (
                 scales.unsqueeze(-2)
-                .expand(list(batch_shape) + [n_l, dim])
-                .reshape(list(batch_shape) + [dim * n_l])
+                .expand(list(batch_shape) + [n_local_arg, dim])
+                .reshape(list(batch_shape) + [dim * n_local_arg])
             )
 
             # Use TruncatedNormal with bounded support [-prior_bound, prior_bound]
@@ -134,30 +134,16 @@ class HierarchicalGaussianMixture(Task):
             )
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=2 * dim, dim_local=dim * n_l
+            global_dist,
+            local_dist_fn,
+            dim_global=2 * dim,
+            dim_local=dim,
+            n_local=n_l,
         )
 
-        # Build composite transform (constrained <-> unconstrained)
-        transforms_list = []
-
-        # global_loc: Uniform[-prior_bound, prior_bound] <-> R
-        for _ in range(dim):
-            transforms_list.append(
-                biject_to(constraints.interval(-prior_bound, prior_bound))
-            )
-
-        # global_scale: HalfNormal (R+) <-> R
-        for _ in range(dim):
-            transforms_list.append(biject_to(constraints.positive))
-
-        # local params: TruncatedNormal (bounded) - use interval transform
-        for _ in range(dim * n_l):
-            transforms_list.append(
-                biject_to(constraints.interval(-prior_bound, prior_bound))
-            )
-
-        # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        # Store parameters for dynamic transform building
+        self.dim = dim
+        self.prior_bound = prior_bound
 
     def get_prior(self):
         """Get prior distribution.
@@ -190,13 +176,14 @@ class HierarchicalGaussianMixture(Task):
             # Global: [:, 0:2*dim] (dim locs + dim scales)
             # Local: [:, 2*dim:] (dim*n_l parameters)
             local_params = parameters[:, 2 * self.dim :]  # noqa: E203
-            local_params = local_params.reshape(num_samples, self.n_l, self.dim)
+            local_params = local_params.reshape(num_samples, -1, self.dim)
+            n_l = local_params.shape[1]
 
             # Sample mixture indices for all contexts at once
             # Shape: (num_samples, n_l)
             idx = torch.distributions.Categorical(
                 probs=self.simulator_params["mixture_weights"]
-            ).sample((num_samples, self.n_l))
+            ).sample((num_samples, n_l))
 
             # Expand for broadcasting: (num_samples, n_l, 1)
             idx_expanded = idx.unsqueeze(-1)
@@ -214,7 +201,7 @@ class HierarchicalGaussianMixture(Task):
             observations = torch.distributions.Normal(loc, scale).sample()
 
             # Flatten to (num_samples, n_l * dim)
-            observations = observations.reshape(num_samples, self.n_l * self.dim)
+            observations = observations.reshape(num_samples, n_l * self.dim)
 
             return observations
 
@@ -228,16 +215,44 @@ class HierarchicalGaussianMixture(Task):
         """
         return self.prior_dist
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs):
-        """Get transforms for converting between constrained and unconstrained space.
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, n_l=None, **kwargs
+    ):
+        """Get transforms for converting between constrained and
+        unconstrained space.
 
         Args:
             automatic_transforms_enabled: Whether to return transforms
+            n_l: Number of local contexts (uses self.n_l if None)
 
         Returns:
             Dictionary with 'parameters' key containing the transform
         """
-        return {"parameters": self.composite_transform.inv}
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform for MCMC
+        transforms_list = []
+
+        # global_loc: Uniform[-prior_bound, prior_bound] <-> R
+        for _ in range(self.dim):
+            transforms_list.append(
+                biject_to(constraints.interval(-self.prior_bound, self.prior_bound))
+            )
+
+        # global_scale: HalfNormal (R+) <-> R
+        for _ in range(self.dim):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # local params: TruncatedNormal (bounded) - use interval transform
+        for _ in range(self.dim * n_l):
+            transforms_list.append(
+                biject_to(constraints.interval(-self.prior_bound, self.prior_bound))
+            )
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def _likelihood(
         self,

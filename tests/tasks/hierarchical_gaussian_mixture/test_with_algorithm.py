@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from sbibm.algorithms.sbi.snpe import run as run_snpe
+from sbibm.algorithms.tfmpe.bottom_up import run as run_bottom_up
 from sbibm.metrics.lc2st import lc2st
 from sbibm.metrics.reverse_kl import reverse_kl
 from sbibm.tasks.hierarchical_gaussian_mixture.task import (
@@ -115,4 +116,101 @@ def test_snpe_with_reference_free_metrics():
         f"\n  LC2ST test_statistic: "
         f"{lc2st_result.get('test_statistic', 'N/A')}"
         f"\n  Log prob (true params): {log_prob_true.item():.3f}"
+    )
+
+
+def test_bottom_up_hierarchical_gaussian_mixture(
+    num_observation=1,
+    num_samples=100,
+    num_simulations=100,
+):
+    """Integration test for TFMPE bottom-up on hierarchical Gaussian
+    mixture.
+
+    Validates that the bottom_up algorithm wrapper:
+    - Loads the task and observation
+    - Runs TFMPE training
+    - Returns samples with correct shape
+    - Returns num_simulations count and log_prob_true_params
+    - Samples fall within prior bounds (global locs/local bounded,
+      global scales positive)
+    """
+    dim = 2
+    task = HierarchicalGaussianMixture(n_l=5, dim=dim)
+
+    # Run the algorithm
+    samples, num_sims, log_prob_true_params, posterior = run_bottom_up(
+        task=task,
+        num_observation=num_observation,
+        num_samples=num_samples,
+        num_simulations=num_simulations,
+        automatic_transforms_enabled=True,
+    )
+
+    # Validate output shape
+    assert isinstance(samples, torch.Tensor)
+    assert samples.shape == (num_samples, task.dim_parameters)
+
+    # Validate num_simulations was recorded
+    assert isinstance(num_sims, int)
+    assert num_sims > 0
+
+    # Validate log_prob_true_params
+    assert (log_prob_true_params is None or
+            isinstance(log_prob_true_params, torch.Tensor))
+
+    # Validate posterior object is returned
+    assert posterior is not None
+    assert hasattr(posterior, "sample")
+    assert hasattr(posterior, "log_prob")
+
+    # Test posterior.sample() returns correct shape
+    posterior_samples = posterior.sample((num_samples,))
+    assert posterior_samples.shape == (num_samples, task.dim_parameters)
+    assert not torch.isnan(posterior_samples).any()
+
+    # Test posterior.log_prob() works on samples
+    log_probs = posterior.log_prob(samples)
+    if log_probs is not None:
+        assert log_probs.shape == (num_samples,)
+        assert torch.isfinite(log_probs).all()
+
+    # Validate samples are not NaN or Inf
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+    # Validate global location parameters are bounded [-10, 10]
+    global_loc = samples[:, :dim]
+    assert (
+        global_loc.min() >= -10.0
+    ), f"global loc must be >= -10 but found {global_loc.min()}"
+    assert (
+        global_loc.max() <= 10.0
+    ), f"global loc must be <= 10 but found {global_loc.max()}"
+
+    # Validate global scale parameters are positive
+    global_scale = samples[:, dim : 2 * dim]
+    assert (
+        global_scale.min() >= 0.0
+    ), f"global scale must be positive but found {global_scale.min()}"
+
+    # Validate local parameters are bounded [-10, 10]
+    local_params = samples[:, 2 * dim :]
+    assert (
+        local_params.min() >= -10.0
+    ), f"local params must be >= -10 but found {local_params.min()}"
+    assert (
+        local_params.max() <= 10.0
+    ), f"local params must be <= 10 but found {local_params.max()}"
+
+    log.info(
+        f"TFMPE bottom-up completed on hierarchical_gaussian_mixture:"
+        f"\n  Num simulations: {num_sims}"
+        f"\n  Sample shape: {samples.shape}"
+        f"\n  Global loc range: [{global_loc.min().item():.3f}, "
+        f"{global_loc.max().item():.3f}]"
+        f"\n  Global scale range: [{global_scale.min().item():.3f}, "
+        f"{global_scale.max().item():.3f}]"
+        f"\n  Local params range: [{local_params.min().item():.3f}, "
+        f"{local_params.max().item():.3f}]"
     )

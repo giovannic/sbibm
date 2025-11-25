@@ -11,6 +11,7 @@ import pytest
 import torch
 
 from sbibm.algorithms.sbi.snpe import run as run_snpe
+from sbibm.algorithms.tfmpe.bottom_up import run as run_bottom_up
 from sbibm.metrics.lc2st import lc2st
 from sbibm.metrics.reverse_kl import reverse_kl
 from sbibm.tasks.hierarchical_slcp.task import HierarchicalSLCP
@@ -248,6 +249,103 @@ def test_snpe_two_rounds():
 
     log.info(
         f"Two-round SNPE completed successfully:"
+        f"\n  Num simulations: {num_sims}"
+        f"\n  Sample shape: {samples.shape}"
+        f"\n  s params range: [{s_params.min().item():.3f}, "
+        f"{s_params.max().item():.3f}]"
+        f"\n  rho range: [{rho_param.min().item():.3f}, "
+        f"{rho_param.max().item():.3f}]"
+        f"\n  Local means range: [{local_means.min().item():.3f}, "
+        f"{local_means.max().item():.3f}]"
+    )
+
+
+def test_bottom_up_hierarchical_slcp(
+    num_observation=1,
+    num_samples=100,
+    num_simulations=100,
+):
+    """Integration test for TFMPE bottom-up on hierarchical SLCP.
+
+    Validates that the bottom_up algorithm wrapper:
+    - Loads the task and observation
+    - Runs TFMPE training
+    - Returns samples with correct shape
+    - Returns num_simulations count and log_prob_true_params
+    - Samples fall within prior bounds (all parameters bounded)
+    """
+    task = HierarchicalSLCP(n_l=5)
+
+    # Run the algorithm
+    samples, num_sims, log_prob_true_params, posterior = run_bottom_up(
+        task=task,
+        num_observation=num_observation,
+        num_samples=num_samples,
+        num_simulations=num_simulations,
+        automatic_transforms_enabled=True,
+    )
+
+    # Validate output shape
+    assert isinstance(samples, torch.Tensor)
+    assert samples.shape == (num_samples, task.dim_parameters)
+
+    # Validate num_simulations was recorded
+    assert isinstance(num_sims, int)
+    assert num_sims > 0
+
+    # Validate log_prob_true_params
+    assert (log_prob_true_params is None or
+            isinstance(log_prob_true_params, torch.Tensor))
+
+    # Validate posterior object is returned
+    assert posterior is not None
+    assert hasattr(posterior, "sample")
+    assert hasattr(posterior, "log_prob")
+
+    # Test posterior.sample() returns correct shape
+    posterior_samples = posterior.sample((num_samples,))
+    assert posterior_samples.shape == (num_samples, task.dim_parameters)
+    assert not torch.isnan(posterior_samples).any()
+
+    # Test posterior.log_prob() works on samples
+    log_probs = posterior.log_prob(samples)
+    if log_probs is not None:
+        assert log_probs.shape == (num_samples,)
+        assert torch.isfinite(log_probs).all()
+
+    # Validate samples are not NaN or Inf
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+    # Validate s1, s2 parameters are bounded [0.5, 3.0]
+    s_params = samples[:, :2]
+    assert (
+        s_params.min() >= 0.5
+    ), f"s params must be >= 0.5 but found {s_params.min()}"
+    assert (
+        s_params.max() <= 3.0
+    ), f"s params must be <= 3.0 but found {s_params.max()}"
+
+    # Validate rho parameter is bounded [-3, 3]
+    rho_param = samples[:, 2]
+    assert (
+        rho_param.min() >= -3.0
+    ), f"rho must be >= -3 but found {rho_param.min()}"
+    assert (
+        rho_param.max() <= 3.0
+    ), f"rho must be <= 3 but found {rho_param.max()}"
+
+    # Validate local means are bounded [-3, 3]
+    local_means = samples[:, 3:]
+    assert (
+        local_means.min() >= -3.0
+    ), f"local means must be >= -3 but found {local_means.min()}"
+    assert (
+        local_means.max() <= 3.0
+    ), f"local means must be <= 3 but found {local_means.max()}"
+
+    log.info(
+        f"TFMPE bottom-up completed on hierarchical_slcp:"
         f"\n  Num simulations: {num_sims}"
         f"\n  Sample shape: {samples.shape}"
         f"\n  s params range: [{s_params.min().item():.3f}, "

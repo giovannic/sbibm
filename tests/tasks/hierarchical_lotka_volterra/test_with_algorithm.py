@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from sbibm.algorithms.sbi.snpe import run as run_snpe
+from sbibm.algorithms.tfmpe.bottom_up import run as run_bottom_up
 from sbibm.metrics.lc2st import lc2st
 from sbibm.metrics.reverse_kl import reverse_kl
 from sbibm.tasks.hierarchical_lotka_volterra.task import (
@@ -175,4 +176,86 @@ def test_snpe_samples_reasonable():
         f"{global_params[:, 1].max().item():.4f}]"
         f"\n  Local params: [{local_params.min().item():.4f}, "
         f"{local_params.max().item():.4f}]"
+    )
+
+
+def test_bottom_up_hierarchical_lotka_volterra(
+    num_observation=1,
+    num_samples=100,
+    num_simulations=100,
+):
+    """Integration test for TFMPE bottom-up on hierarchical Lotka-Volterra.
+
+    Validates that the bottom_up algorithm wrapper:
+    - Loads the task and observation
+    - Runs TFMPE training
+    - Returns samples with correct shape
+    - Returns num_simulations count and log_prob_true_params
+    - Samples fall within prior bounds (all parameters positive due to
+      LogNormal distribution)
+    """
+    task = HierarchicalLotkaVolterra(n_l=5)
+
+    # Run the algorithm
+    samples, num_sims, log_prob_true_params, posterior = run_bottom_up(
+        task=task,
+        num_observation=num_observation,
+        num_samples=num_samples,
+        num_simulations=num_simulations,
+        automatic_transforms_enabled=True,
+    )
+
+    # Validate output shape
+    assert isinstance(samples, torch.Tensor)
+    assert samples.shape == (num_samples, task.dim_parameters)
+
+    # Validate num_simulations was recorded
+    assert isinstance(num_sims, int)
+    assert num_sims > 0
+
+    # Validate log_prob_true_params
+    assert (log_prob_true_params is None or
+            isinstance(log_prob_true_params, torch.Tensor))
+
+    # Validate posterior object is returned
+    assert posterior is not None
+    assert hasattr(posterior, "sample")
+    assert hasattr(posterior, "log_prob")
+
+    # Test posterior.sample() returns correct shape
+    posterior_samples = posterior.sample((num_samples,))
+    assert posterior_samples.shape == (num_samples, task.dim_parameters)
+    assert not torch.isnan(posterior_samples).any()
+
+    # Test posterior.log_prob() works on samples
+    log_probs = posterior.log_prob(samples)
+    if log_probs is not None:
+        assert log_probs.shape == (num_samples,)
+        assert torch.isfinite(log_probs).all()
+
+    # Validate samples are not NaN or Inf
+    assert not torch.isnan(samples).any()
+    assert not torch.isinf(samples).any()
+
+    # Validate hyperprior scales (indices 4:8) are positive
+    hyperprior_scales = samples[:, 4:8]
+    assert (
+        hyperprior_scales.min() > 0
+    ), f"hyperprior scales must be positive but found {hyperprior_scales.min()}"
+
+    # Validate all local LV parameters (indices 8:) are positive
+    # (enforced by LogNormal distribution)
+    local_lv_params = samples[:, 8:]
+    assert (
+        local_lv_params.min() > 0
+    ), f"local LV params must be positive but found {local_lv_params.min()}"
+
+    log.info(
+        f"TFMPE bottom-up completed on hierarchical_lotka_volterra:"
+        f"\n  Num simulations: {num_sims}"
+        f"\n  Sample shape: {samples.shape}"
+        f"\n  Hyperprior scales range: [{hyperprior_scales.min().item():.3f}, "
+        f"{hyperprior_scales.max().item():.3f}]"
+        f"\n  Local LV params range: [{local_lv_params.min().item():.3f}, "
+        f"{local_lv_params.max().item():.3f}]"
     )

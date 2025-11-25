@@ -116,16 +116,17 @@ class HierarchicalGaussianLinearUniform(Task):
 
         # Local parameters: context-specific means bounded by uniform prior
         # (dim_local_total total across all contexts)
-        def local_dist_fn(global_params):
+        def local_dist_fn(global_params, n_local_arg):
             # Return independent Uniform distributions for all local means.
-            # dim_local_total = dim_local_per_context * n_l
+            # dim_local_total = dim_local_per_context * n_local_arg
             # Independent of global_params
             batch_shape = global_params.shape[:-1]
+            dim_local = dim_local_per_context * n_local_arg
             return pdist.Independent(
                 pdist.Uniform(
-                    low=-prior_bound * torch.ones(dim_local_total),
-                    high=+prior_bound * torch.ones(dim_local_total),
-                ).expand(list(batch_shape) + [dim_local_total]),
+                    low=-prior_bound * torch.ones(dim_local),
+                    high=+prior_bound * torch.ones(dim_local),
+                ).expand(list(batch_shape) + [dim_local]),
                 1,
             )
 
@@ -133,24 +134,14 @@ class HierarchicalGaussianLinearUniform(Task):
             global_dist,
             local_dist_fn,
             dim_global=dim_global,
-            dim_local=dim_local_total,
+            dim_local=dim_local_per_context,
+            n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 
-        # Build composite transform (constrained <-> unconstrained)
-        transforms_list = []
-
-        # global_scale: HalfNormal (R+) <-> R
-        transforms_list.append(biject_to(constraints.positive))
-
-        # local_means: Uniform (bounded) - use interval transform
-        for _ in range(dim_local_total):
-            transforms_list.append(
-                biject_to(constraints.interval(-prior_bound, +prior_bound))
-            )
-
-        # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        # Store parameters for dynamic transform building
+        self.dim_local_per_context = dim_local_per_context
+        self.prior_bound = prior_bound
 
     def get_prior(self):
         """Get prior distribution.
@@ -182,10 +173,11 @@ class HierarchicalGaussianLinearUniform(Task):
             # Local: [:, dim_global:] (dim_local_per_context means per context)
             global_scale = parameters[:, : self.dim_global]  # noqa: E203
             local_means = parameters[:, self.dim_global :]  # noqa: E203
+            n_l = local_means.shape[1]
 
             # For each local context, sample observations
             observations = []
-            for i in range(self.n_l):
+            for i in range(n_l):
                 # Extract mean for context i
                 start_idx = i * self.dim_local_per_context
                 end_idx = (i + 1) * self.dim_local_per_context
@@ -195,7 +187,7 @@ class HierarchicalGaussianLinearUniform(Task):
                 # Broadcast global_scale across all dimensions
                 obs_dist = pdist.Normal(
                     loc=mean_i,
-                    scale=global_scale.expand(-1, self.dim_local_per_context),
+                    scale=global_scale,
                 )
                 obs_i = obs_dist.sample()
 
@@ -216,17 +208,38 @@ class HierarchicalGaussianLinearUniform(Task):
         """
         return self.prior_dist
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, n_l=None, **kwargs: Any
+    ):
         """Get transforms for converting between constrained and
         unconstrained space.
 
         Args:
             automatic_transforms_enabled: Whether to return transforms
+            n_l: Number of local contexts (uses self.n_l if None)
 
         Returns:
             Dictionary with 'parameters' key containing the transform
         """
-        return {"parameters": self.composite_transform.inv}
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform (constrained <-> unconstrained)
+        transforms_list = []
+
+        # global_scale: HalfNormal (R+) <-> R
+        transforms_list.append(biject_to(constraints.positive))
+
+        # local_means: Uniform (bounded) - use interval transform
+        # dim_local_per_context means per context, n_l contexts
+        for _ in range(self.dim_local_per_context * n_l):
+            transforms_list.append(
+                biject_to(constraints.interval(-self.prior_bound, +self.prior_bound))
+            )
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def _likelihood(
         self,

@@ -74,37 +74,27 @@ class HierarchicalSLCP(Task):
         global_dist = BlockwiseDistribution([s_dist, rho_dist])
 
         # Local params distribution: means for each context
-        def local_dist_fn(global_params):
+        def local_dist_fn(global_params, n_local_arg):
             # Each context has 2 means (m0, m1)
-            # local_params: 2*n_l dims, all ~ Uniform(-3, 3)
+            # local_params: 2*n_local_arg dims, all ~ Uniform(-3, 3)
             batch_shape = global_params.shape[:-1]
             local_dist = (
                 pdist.Uniform(-3.0, 3.0)
-                .expand(list(batch_shape) + [2 * n_l])
+                .expand(list(batch_shape) + [2 * n_local_arg])
                 .to_event(1)
             )
             return local_dist
 
         self.prior_dist = HierarchicalDistribution(
-            global_dist, local_dist_fn, dim_global=3, dim_local=2 * n_l
+            global_dist,
+            local_dist_fn,
+            dim_global=3,
+            dim_local=2,
+            n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 
-        # Build composite transform for MCMC
-        transforms_list = []
-
-        # s1, s2: Uniform[0.5, 3.0] <-> R
-        for _ in range(2):
-            transforms_list.append(biject_to(constraints.interval(0.5, 3.0)))
-
-        # rho: Uniform[-3, 3] <-> R
-        transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
-
-        # Local means: Uniform[-3, 3] <-> R
-        for _ in range(2 * n_l):
-            transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
-
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        # Transforms will be built dynamically in _get_transforms
 
     def get_prior(self):
         """Get prior distribution.
@@ -137,7 +127,8 @@ class HierarchicalSLCP(Task):
             # Global: [:, 0:3] (s1, s2, rho)
             # Local: [:, 3:] (2*n_l means)
             global_params = parameters[:, :3]
-            local_params = parameters[:, 3:].reshape(num_samples, self.n_l, 2)
+            local_params = parameters[:, 3:].reshape(num_samples, -1, 2)
+            n_l = local_params.shape[1]
 
             # Extract global covariance parameters
             s1 = global_params[:, 0]
@@ -164,13 +155,13 @@ class HierarchicalSLCP(Task):
             # Expand means and covariance for all contexts and observations
             m_expanded = (
                 local_params.unsqueeze(2)
-                .expand(num_samples, self.n_l, self.num_data, 2)
+                .expand(num_samples, n_l, self.num_data, 2)
                 .float()
             )
             S_expanded = (
                 S.unsqueeze(1)
                 .unsqueeze(2)
-                .expand(num_samples, self.n_l, self.num_data, 2, 2)
+                .expand(num_samples, n_l, self.num_data, 2, 2)
                 .float()
             )
 
@@ -189,8 +180,38 @@ class HierarchicalSLCP(Task):
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
-        return {"parameters": self.composite_transform.inv}
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, n_l=None, **kwargs: Any
+    ):
+        """Get transforms for converting between constrained and
+        unconstrained space.
+
+        Args:
+            automatic_transforms_enabled: Whether to return transforms
+            n_l: Number of local contexts (uses self.n_l if None)
+
+        Returns:
+            Dictionary with 'parameters' key containing the transform
+        """
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform for MCMC
+        transforms_list = []
+
+        # s1, s2: Uniform[0.5, 3.0] <-> R
+        for _ in range(2):
+            transforms_list.append(biject_to(constraints.interval(0.5, 3.0)))
+
+        # rho: Uniform[-3, 3] <-> R
+        transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
+
+        # Local means: Uniform[-3, 3] <-> R
+        for _ in range(2 * n_l):
+            transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
+
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def _likelihood(
         self,

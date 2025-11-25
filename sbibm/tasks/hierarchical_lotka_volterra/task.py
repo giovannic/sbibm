@@ -131,21 +131,21 @@ class HierarchicalLotkaVolterra(Task):
         # hyperpriors
         # For each site: [alpha_i, beta_i, gamma_i, delta_i] ~
         # LogNormal(mu_global, sigma_global)
-        def local_dist_fn(global_params):
+        def local_dist_fn(global_params, n_local_arg):
             # global_params shape: [..., 8]
             # Extract means and scales
             mu = global_params[..., :4]  # [..., 4] means
             sigma = global_params[..., 4:]  # [..., 4] scales
 
             # Create independent LogNormal for each site's parameters
-            # Stack n_l times with same hyperpriors
+            # Stack n_local_arg times with same hyperpriors
             loc_list = []
             scale_list = []
-            for _ in range(n_l):
+            for _ in range(n_local_arg):
                 loc_list.append(mu)
                 scale_list.append(sigma)
 
-            # Concatenate across sites: [..., 4*n_l]
+            # Concatenate across sites: [..., 4*n_local_arg]
             loc = torch.cat(loc_list, dim=-1)
             scale = torch.cat(scale_list, dim=-1)
 
@@ -155,28 +155,12 @@ class HierarchicalLotkaVolterra(Task):
             global_dist,
             local_dist_fn,
             dim_global=8,
-            dim_local=4 * n_l,
+            dim_local=4,
+            n_local=n_l,
         )
         self.prior_dist.set_default_validate_args(False)
 
-        # Build composite transform (constrained <-> unconstrained)
-        # All parameters are positive (LogNormal in local) -> R
-        transforms_list = []
-
-        # Global hyperprior means: unbounded (Normal)
-        for _ in range(4):
-            transforms_list.append(torch.distributions.transforms.identity_transform)
-
-        # Global hyperprior scales: positive (HalfNormal)
-        for _ in range(4):
-            transforms_list.append(biject_to(constraints.positive))
-
-        # Local parameters: all positive (LogNormal)
-        for _ in range(4 * n_l):
-            transforms_list.append(biject_to(constraints.positive))
-
-        # Use custom wrapper to ensure Jacobian is properly summed
-        self.composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        # Transforms will be built dynamically in _get_transforms
 
         # Initial conditions for ODE
         self.u0 = torch.tensor([30.0, 1.0])
@@ -235,9 +219,12 @@ class HierarchicalLotkaVolterra(Task):
         # Extract local parameters
         local_params = parameters[:, 8:]  # (num_samples, 4*n_l)
 
+        # Infer n_l from local parameters shape
+        n_l = local_params.shape[1] // 4
+
         # Reshape local params to (num_samples, n_l, 4)
         # where each site has [alpha_i, beta_i, gamma_i, delta_i]
-        local_reshaped = local_params.reshape(num_samples, self.n_l, 4)
+        local_reshaped = local_params.reshape(num_samples, n_l, 4)
 
         # Create flattened batch: (num_samples * n_l, 4)
         # For each (sample, site) pair, we need [alpha, beta,
@@ -261,7 +248,7 @@ class HierarchicalLotkaVolterra(Task):
         # Initial conditions for all batch elements
         u0_batch = jnp.tile(
             jnp.array(self.u0.numpy()),
-            (num_samples * self.n_l, 1),
+            (num_samples * n_l, 1),
         )
         t_save_jax = jnp.array(t_save.numpy())
 
@@ -291,12 +278,12 @@ class HierarchicalLotkaVolterra(Task):
 
         # Reshape to (num_samples, n_l, 2, num_timepoints)
         expected_shape = torch.Size(
-            [num_samples * self.n_l, 2, int(self.days / self.saveat) + 1]
+            [num_samples * n_l, 2, int(self.days / self.saveat) + 1]
         )
         if trajectories.shape != expected_shape:
             trajectories = float("nan") * torch.ones(expected_shape)
 
-        trajectories = trajectories.reshape(num_samples, self.n_l, 2, -1)
+        trajectories = trajectories.reshape(num_samples, n_l, 2, -1)
 
         return trajectories.float()
 
@@ -315,16 +302,40 @@ class HierarchicalLotkaVolterra(Task):
         """Get prior distribution object for likelihood computation."""
         return self.prior_dist
 
-    def _get_transforms(self, automatic_transforms_enabled: bool = True, **kwargs: Any):
+    def _get_transforms(
+        self, automatic_transforms_enabled: bool = True, n_l=None, **kwargs: Any
+    ):
         """Get transforms for unconstrained <-> constrained space.
 
         Args:
             automatic_transforms_enabled: Whether to return transforms
+            n_l: Number of local contexts (uses self.n_l if None)
 
         Returns:
             Dictionary with 'parameters' key containing the transform
         """
-        return {"parameters": self.composite_transform.inv}
+        if n_l is None:
+            n_l = self.n_l
+
+        # Build composite transform (constrained <-> unconstrained)
+        # All parameters are positive (LogNormal in local) -> R
+        transforms_list = []
+
+        # Global hyperprior means: unbounded (Normal)
+        for _ in range(4):
+            transforms_list.append(torch.distributions.transforms.identity_transform)
+
+        # Global hyperprior scales: positive (HalfNormal)
+        for _ in range(4):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # Local parameters: all positive (LogNormal)
+        for _ in range(4 * n_l):
+            transforms_list.append(biject_to(constraints.positive))
+
+        # Use custom wrapper to ensure Jacobian is properly summed
+        composite_transform = SummedStackTransform(transforms_list, dim=-1)
+        return {"parameters": composite_transform.inv}
 
     def get_simulator(self, max_calls: Optional[int] = None) -> Simulator:
         """Get function returning samples from simulator given parameters
@@ -353,6 +364,10 @@ class HierarchicalLotkaVolterra(Task):
             """
             num_samples = parameters.shape[0]
 
+            # Extract local parameters and infer n_l from shape
+            local_params = parameters[:, 8:]
+            n_l = local_params.shape[1] // 4
+
             # Solve ODE for all parameters and sites
             # Returns (num_samples, n_l, 2, num_timepoints)
             all_observations = self.solve_ode_trajectories(parameters)
@@ -362,7 +377,7 @@ class HierarchicalLotkaVolterra(Task):
                 context_data = []
 
                 # For each local context (site)
-                for i in range(self.n_l):
+                for i in range(n_l):
                     # Get trajectory for this site
                     u = all_observations[b, i, :, :]  # (2, timepoints)
 
