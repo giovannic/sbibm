@@ -512,7 +512,7 @@ def run(
     # Training parameters
     n_samples_per_round = num_simulations // 2
     n_val_samples = min(1000, num_simulations // 10)
-    n_iter_per_round = 50
+    n_iter_per_round = 1000
     batch_size = 100
 
     # Train TFMPE
