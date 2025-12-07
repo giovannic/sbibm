@@ -31,11 +31,12 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
-def load_all_results(input_dir: Path) -> dict:
+def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
     """Load benchmark results for all hierarchical tasks.
 
     Args:
         input_dir: Directory containing benchmark CSV files
+        n_l: Scaling factor for adjusting num_simulations
 
     Returns:
         Dict mapping task_name -> DataFrame with all results
@@ -71,6 +72,21 @@ def load_all_results(input_dir: Path) -> dict:
     for task_name in sorted(results.keys()):
         results[task_name] = pd.concat(results[task_name], ignore_index=True)
         log.info(f"Loaded {len(results[task_name])} total runs for " f"'{task_name}'")
+
+        # Apply scaling to num_simulations if n_l > 1
+        if n_l > 1:
+            df = results[task_name]
+            snpe_mask = df["algorithm"] == "snpe"
+            deepset_mask = df["algorithm"] == "deepset"
+
+            if snpe_mask.any():
+                df.loc[snpe_mask, "num_simulations"] *= n_l
+                log.info(f"  Scaled SNPE num_simulations by {n_l}")
+
+            if deepset_mask.any():
+                deepset_scale = (n_l + 1) // 2
+                df.loc[deepset_mask, "num_simulations"] *= deepset_scale
+                log.info(f"  Scaled DeepSet num_simulations by {deepset_scale}")
 
     return results
 
@@ -267,6 +283,12 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--n_l",
+        type=int,
+        default=1,
+        help="Scaling factor for adjusting num_simulations",
+    )
 
     args = parser.parse_args()
 
@@ -281,6 +303,7 @@ def main():
     log.info(f"Metric: {args.metric}")
     log.info(f"Output path: {args.output_path}")
     log.info(f"Config: {args.config}")
+    log.info(f"n_l scaling factor: {args.n_l}")
     log.info("=" * 80)
 
     # Validate output path
@@ -289,7 +312,7 @@ def main():
         raise ValueError(f"Output path must end with .png, got: {output_path.suffix}")
 
     # Load all results
-    results = load_all_results(input_dir=Path(args.input_dir))
+    results = load_all_results(input_dir=Path(args.input_dir), n_l=args.n_l)
 
     # Print summary statistics
     log.info("\nSummary Statistics:")

@@ -506,7 +506,7 @@ def run(
     )
 
     # Setup optimizer
-    optimizer = optax.adam(learning_rate=1e-3)
+    optimizer = optax.adam(learning_rate=1e-4)
     opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
 
     # Training parameters
