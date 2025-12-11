@@ -118,7 +118,11 @@ def visualize_posterior(
 
     # Load task
     log.info(f"Loading task: {task_name} with n_l={n_l}")
-    task = sbibm.get_task(task_name, n_l=n_l)
+    task = sbibm.get_task(
+        task_name,
+        n_l=n_l,
+        device=algorithm_kwargs['device']
+    )
 
     # Import algorithm
     log.info(f"Importing algorithm: {algorithm}")
@@ -348,6 +352,12 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default='cpu',
+        help="Device",
+    )
 
     args = parser.parse_args()
 
@@ -381,6 +391,7 @@ def main():
         config=args.config,
         seed=args.seed,
         num_rounds=args.num_rounds,
+        device=args.device
     )
 
     log.info("=" * 80)

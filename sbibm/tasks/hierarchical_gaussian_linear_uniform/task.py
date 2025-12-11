@@ -22,6 +22,7 @@ class HierarchicalGaussianLinearUniform(Task):
         dim: int = 26,
         prior_bound: float = 10.0,
         simulator_scale: float = 0.1,
+        device: str = 'cpu'
     ):
         """Hierarchical Gaussian Linear Uniform
 
@@ -61,8 +62,8 @@ class HierarchicalGaussianLinearUniform(Task):
             ValueError: If (dim - 1) does not divide evenly by n_l
         """
         self.n_l = n_l
-        self.prior_bound = prior_bound
-        self.simulator_scale = simulator_scale
+        self.prior_bound = torch.tensor(prior_bound, device=device)
+        self.simulator_scale = torch.tensor(simulator_scale, device=device)
 
         dim = n_l + 1
 
@@ -104,7 +105,7 @@ class HierarchicalGaussianLinearUniform(Task):
         # Define hierarchical prior distribution
         # Global parameters: shared noise scale (dim_global=1)
         global_dist = pdist.Independent(
-            pdist.HalfNormal(simulator_scale).expand([1]), 1
+            pdist.HalfNormal(self.simulator_scale).expand([1]), 1
         )
 
         # Local parameters: context-specific means bounded by uniform prior
@@ -117,8 +118,8 @@ class HierarchicalGaussianLinearUniform(Task):
             dim_local = dim_local_per_context * n_local_arg
             return pdist.Independent(
                 pdist.Uniform(
-                    low=-prior_bound * torch.ones(dim_local),
-                    high=+prior_bound * torch.ones(dim_local),
+                    low=-prior_bound * torch.ones(dim_local, device=device),
+                    high=+prior_bound * torch.ones(dim_local, device=device),
                 ).expand(list(batch_shape) + [dim_local]),
                 1,
             )
