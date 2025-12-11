@@ -41,41 +41,42 @@ def setup_logging(verbose: bool = False) -> None:
     )
 
 
-def generate_hierarchical_two_moons_labels(
-    n_l: int,
+def generate_hierarchical_labels(
+    task,
     max_local_contexts: int,
 ) -> List[str]:
-    """Generate custom parameter labels for hierarchical_two_moons.
+    """Generate custom parameter labels for hierarchical tasks.
 
     Args:
-        n_l: Number of local contexts
+        task: Hierarchical task with task.prior_dist containing dim_global,
+              dim_local, and n_local
         max_local_contexts: Max local contexts to show in visualization
 
     Returns:
-        List of parameter labels (e.g., ["global_loc₀", "local₁_θ₀", ...])
+        List of parameter labels (e.g., ["global₀", "local₀_θ₀", ...])
     """
     numbers_unicode = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"]
     labels = []
 
-    # Global: 4 pooling params (2 locs, 2 scales)
-    labels.extend(
-        [
-            f"global_loc{numbers_unicode[0]}",
-            f"global_loc{numbers_unicode[1]}",
-            f"global_scale{numbers_unicode[0]}",
-            f"global_scale{numbers_unicode[1]}",
-        ]
-    )
+    # Get dimensions from task.prior_dist
+    dim_global = task.prior_dist.dim_global
+    dim_local = task.prior_dist.dim_local
+    n_l = task.prior_dist.n_local
 
-    # Local: 2 params per context
+    # Generate global parameter labels
+    for i in range(dim_global):
+        idx_str = "".join(
+            numbers_unicode[int(d)] for d in str(i)
+        ) if i < 10 else str(i)
+        labels.append(f"global{idx_str}")
+
+    # Generate local parameter labels
     num_local_to_show = min(max_local_contexts, n_l)
     for ctx in range(num_local_to_show):
-        labels.extend(
-            [
-                f"local{numbers_unicode[ctx]}_θ{numbers_unicode[0]}",
-                f"local{numbers_unicode[ctx]}_θ{numbers_unicode[1]}",
-            ]
-        )
+        ctx_str = numbers_unicode[ctx] if ctx < 10 else str(ctx)
+        for i in range(dim_local):
+            idx_str = numbers_unicode[i] if i < 10 else str(i)
+            labels.append(f"local{ctx_str}_θ{idx_str}")
 
     return labels
 
@@ -110,13 +111,6 @@ def visualize_posterior(
     """
     log = logging.getLogger(__name__)
 
-    # Validate task name
-    if task_name != "hierarchical_two_moons":
-        raise ValueError(
-            f"Task '{task_name}' not supported. "
-            f"Only 'hierarchical_two_moons' is currently implemented."
-        )
-
     # Set random seed if provided
     if seed is not None:
         torch.manual_seed(seed)
@@ -134,9 +128,14 @@ def visualize_posterior(
         from sbibm.algorithms.sbi.snle import run as run_algorithm
     elif algorithm == "snre":
         from sbibm.algorithms.sbi.snre import run as run_algorithm
+    elif algorithm == "deepset":
+        from sbibm.algorithms.deepset import run as run_algorithm
+    elif algorithm == "bottom_up":
+        from sbibm.algorithms.tfmpe.bottom_up import run as run_algorithm
     else:
         raise ValueError(
-            f"Unknown algorithm: {algorithm}. " f"Choose from: snpe, snle, snre"
+            f"Unknown algorithm: {algorithm}. "
+            f"Choose from: snpe, snle, snre, deepset, bottom_up"
         )
 
     # Run algorithm
@@ -144,29 +143,31 @@ def visualize_posterior(
         f"Running {algorithm} with {num_simulations} simulations "
         f"on observation {num_observation}"
     )
+
+    # Only pass automatic_transforms_enabled to algorithms that support it
+    if algorithm in ["snpe", "snle", "snre", "bottom_up"]:
+        algorithm_kwargs["automatic_transforms_enabled"] = True
+
     samples, actual_num_sims, log_prob_true, posterior = run_algorithm(
         task=task,
         num_samples=num_samples,
         num_simulations=num_simulations,
         num_observation=num_observation,
-        automatic_transforms_enabled=True,
         **algorithm_kwargs,
     )
 
     log.info(f"Algorithm completed ({actual_num_sims} simulations)")
 
-    # Generate custom labels for hierarchical_two_moons
+    # Generate custom labels for hierarchical task
     log.info("Generating custom parameter labels")
-    labels = generate_hierarchical_two_moons_labels(
-        n_l=n_l,
+    labels = generate_hierarchical_labels(
+        task=task,
         max_local_contexts=max_local_contexts,
     )
 
-    # For hierarchical_two_moons:
-    # - 4 global params (2 locs, 2 scales)
-    # - 2 params per local context
-    num_global = 4
-    num_local_per_ctx = 2
+    # Get dimensions from task.prior_dist
+    num_global = task.prior_dist.dim_global
+    num_local_per_ctx = task.prior_dist.dim_local
     num_local_to_show = min(max_local_contexts, n_l)
     num_dims_to_plot = num_global + num_local_per_ctx * num_local_to_show
 
@@ -285,7 +286,7 @@ def main():
         "--algorithm",
         type=str,
         default="snpe",
-        choices=["snpe", "snle", "snre"],
+        choices=["snpe", "snle", "snre", "deepset", "bottom_up"],
         help="Algorithm to use",
     )
     parser.add_argument(

@@ -68,7 +68,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --device "$DEVICE" \
       --n_l "$N_L" \
       --seed 42 \
-      --num_samples 100
+      --num_samples 1000
 
     python scripts/run_hierarchical_benchmark.py \
       --task "$TASK" \
@@ -79,7 +79,7 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --device "$DEVICE" \
       --n_l "$N_L" \
       --seed 42 \
-      --num_samples 100
+      --num_samples 1000
 
     python scripts/run_hierarchical_benchmark.py \
       --task "$TASK" \
@@ -90,12 +90,17 @@ for ALGORITHM in "${ALGORITHMS[@]}"; do
       --device "$DEVICE" \
       --n_l "$N_L" \
       --seed 42 \
-      --num_samples 100
+      --num_samples 1000
 
     echo "Generating visualization for task: $TASK"
     python scripts/visualize_hierarchical_posterior.py \
       --task "$TASK" \
       --algorithm "$ALGORITHM" \
+      --n_l "$N_L" \
+      --num_simulations 10000 \
+      --num_observation 1 \
+      --num_samples 1000 \
+      --seed 42 \
       --output_path "test_results/${TASK}_${ALGORITHM}_posterior.png"
   done
 done
