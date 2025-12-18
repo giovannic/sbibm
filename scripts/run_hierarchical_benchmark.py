@@ -188,6 +188,7 @@ def run_benchmark(
         f"LC2ST p-value: {results['lc2st_p_value']:.4f}, "
         f"critical_value: {results['lc2st_critical_value']:.4f}, "
         f"test_statistic: {results['lc2st_test_statistic']:.4f}, "
+        f"critical_value: {results['lc2st_critical_value']:.4f}, "
         f"reject: {results['lc2st_reject']}"
     )
 

@@ -322,7 +322,7 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
     return simulator_fn
 
 
-def make_local_fn(task, automatic_transforms_enabled: bool = False):
+def make_local_fn(task, automatic_transforms_enabled: bool = False, device='cpu'):
     """Create local parameter sampling function for TFMPE.
 
     Args:
@@ -381,6 +381,7 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False):
             )
         else:
             global_torch_constrained = global_torch_unconstrained
+        global_torch_constrained = global_torch_constrained.to(device=device)
 
         # Sample local parameters conditioned on constrained global
         local_dist = prior_dist.local_dist_fn(
@@ -441,6 +442,7 @@ def run(
         - posterior: Posterior object with sample() and log_prob()
             methods
     """
+    device = kwargs.get('device', 'cpu')
     start_time = time.time()
 
     # Load observation
@@ -463,7 +465,7 @@ def run(
     # Create callback functions for TFMPE using helpers
     prior_fn = make_prior_fn(task, automatic_transforms_enabled)
     simulator_fn = make_simulator_fn(task, automatic_transforms_enabled)
-    local_fn = make_local_fn(task, automatic_transforms_enabled)
+    local_fn = make_local_fn(task, automatic_transforms_enabled, device=device)
 
     # Define which parameters are global
     global_names = [
