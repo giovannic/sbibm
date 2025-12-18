@@ -22,13 +22,15 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 
 import sbibm
+from sbibm.visualisation import (
+    generate_hierarchical_labels,
+    plot_hierarchical_posterior,
+)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -39,46 +41,6 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
-
-def generate_hierarchical_labels(
-    task,
-    max_local_contexts: int,
-) -> List[str]:
-    """Generate custom parameter labels for hierarchical tasks.
-
-    Args:
-        task: Hierarchical task with task.prior_dist containing dim_global,
-              dim_local, and n_local
-        max_local_contexts: Max local contexts to show in visualization
-
-    Returns:
-        List of parameter labels (e.g., ["global₀", "local₀_θ₀", ...])
-    """
-    numbers_unicode = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"]
-    labels = []
-
-    # Get dimensions from task.prior_dist
-    dim_global = task.prior_dist.dim_global
-    dim_local = task.prior_dist.dim_local
-    n_l = task.prior_dist.n_local
-
-    # Generate global parameter labels
-    for i in range(dim_global):
-        idx_str = "".join(
-            numbers_unicode[int(d)] for d in str(i)
-        ) if i < 10 else str(i)
-        labels.append(f"global{idx_str}")
-
-    # Generate local parameter labels
-    num_local_to_show = min(max_local_contexts, n_l)
-    for ctx in range(num_local_to_show):
-        ctx_str = numbers_unicode[ctx] if ctx < 10 else str(ctx)
-        for i in range(dim_local):
-            idx_str = numbers_unicode[i] if i < 10 else str(i)
-            labels.append(f"local{ctx_str}_θ{idx_str}")
-
-    return labels
 
 
 def visualize_posterior(
@@ -183,7 +145,7 @@ def visualize_posterior(
     )
 
     # Slice samples to dimensions we want to plot
-    samples_sliced = samples[:, :num_dims_to_plot].numpy()
+    samples_sliced = samples[:, :num_dims_to_plot]
 
     # Get true parameters if available
     try:
@@ -192,84 +154,19 @@ def visualize_posterior(
             .numpy()
             .flatten()[:num_dims_to_plot]
         )
-        has_true_params = True
     except Exception:
-        has_true_params = False
+        true_params = None
         log.warning("True parameters not available")
 
     # Create visualization
-    log.info("Creating posterior visualization with matplotlib")
-    fig, axes = plt.subplots(
-        num_dims_to_plot,
-        num_dims_to_plot,
-        figsize=(2 * num_dims_to_plot, 2 * num_dims_to_plot),
-    )
-
-    # Plot pairwise comparisons
-    for i in range(num_dims_to_plot):
-        for j in range(num_dims_to_plot):
-            ax = axes[i, j] if num_dims_to_plot > 1 else axes
-
-            if i == j:
-                # Diagonal: histogram
-                ax.hist(
-                    samples_sliced[:, i],
-                    bins=30,
-                    color="#0035FD",
-                    alpha=0.6,
-                    density=True,
-                )
-                if has_true_params:
-                    ax.axvline(
-                        true_params[i],
-                        color="#f92700",
-                        linestyle="--",
-                        linewidth=2,
-                        label="True",
-                    )
-                ax.set_yticks([])
-            elif i > j:
-                # Lower triangle: scatter plot
-                ax.scatter(
-                    samples_sliced[:, j],
-                    samples_sliced[:, i],
-                    s=1,
-                    alpha=0.3,
-                    color="#0035FD",
-                )
-                if has_true_params:
-                    ax.scatter(
-                        true_params[j],
-                        true_params[i],
-                        s=50,
-                        color="#f92700",
-                        marker="x",
-                        linewidths=2,
-                    )
-            else:
-                # Upper triangle: hide
-                ax.axis("off")
-
-            # Add labels on edges
-            if i == num_dims_to_plot - 1:
-                ax.set_xlabel(labels[j], fontsize=10)
-            else:
-                ax.set_xticks([])
-
-            if j == 0 and i > 0:
-                ax.set_ylabel(labels[i], fontsize=10)
-            else:
-                ax.set_yticks([])
-
-    plt.tight_layout()
-
-    # Save figure
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+    log.info("Creating posterior visualization")
     log.info(f"Saving figure to {output_path}")
-    plt.savefig(str(output_path), dpi=300, bbox_inches="tight")
-    plt.close()
+    plot_hierarchical_posterior(
+        samples=samples_sliced,
+        labels=labels,
+        output_path=Path(output_path),
+        true_params=true_params,
+    )
     log.info("Visualization complete!")
 
 

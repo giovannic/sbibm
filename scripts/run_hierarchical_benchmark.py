@@ -27,6 +27,10 @@ import torch
 import sbibm
 from sbibm.metrics.lc2st import lc2st
 from sbibm.metrics.reverse_kl import reverse_kl
+from sbibm.visualisation import (
+    generate_hierarchical_labels,
+    plot_hierarchical_posterior,
+)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -48,6 +52,9 @@ def run_benchmark(
     seed: Optional[int] = None,
     num_samples: int = 1000,
     n_l: int = 5,
+    plot_posterior: bool = False,
+    max_local_contexts: int = 2,
+    plot_output_dir: Optional[Path] = None,
     **algorithm_kwargs,
 ) -> Dict:
     """Run a single benchmark experiment.
@@ -61,6 +68,9 @@ def run_benchmark(
         seed: Random seed for reproducibility
         num_samples: Number of posterior samples for metrics
         n_l: Number of local contexts (for hierarchical tasks)
+        plot_posterior: Whether to generate posterior visualization
+        max_local_contexts: Max local contexts to show in visualization
+        plot_output_dir: Directory for plots (uses output_dir if None)
         **algorithm_kwargs: Additional kwargs for the algorithm
 
     Returns:
@@ -179,6 +189,56 @@ def run_benchmark(
         f"reject: {results['lc2st_reject']}"
     )
 
+    # Generate posterior visualization if requested
+    if plot_posterior:
+        log.info("Generating posterior visualization...")
+
+        # Generate hierarchical labels
+        labels = generate_hierarchical_labels(
+            task=task,
+            max_local_contexts=max_local_contexts,
+        )
+
+        # Determine dimensions to plot
+        num_global = task.prior_dist.dim_global
+        num_local_per_ctx = task.prior_dist.dim_local
+        num_local_to_show = min(max_local_contexts, n_l)
+        num_dims_to_plot = (
+            num_global + num_local_per_ctx * num_local_to_show
+        )
+
+        # Slice samples and true params
+        samples_sliced = samples[:, :num_dims_to_plot]
+
+        try:
+            true_params = (
+                task.get_true_parameters(num_observation=num_observation)
+                .numpy()
+                .flatten()[:num_dims_to_plot]
+            )
+        except Exception:
+            true_params = None
+            log.warning("True parameters not available for plotting")
+
+        # Create plot output path
+        plot_dir = plot_output_dir if plot_output_dir else output_dir
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        plot_path = (
+            plot_dir
+            / f"{task_name}_{algorithm}_"
+            f"{actual_num_sims}_obs{num_observation}_posterior.png"
+        )
+
+        # Generate plot
+        plot_hierarchical_posterior(
+            samples=samples_sliced,
+            labels=labels,
+            output_path=plot_path,
+            true_params=true_params,
+        )
+
+        log.info(f"Posterior plot saved to {plot_path}")
+
     return results
 
 
@@ -289,6 +349,23 @@ def main():
         help="Number of local contexts (for hierarchical tasks)",
     )
     parser.add_argument(
+        "--plot_posterior",
+        action="store_true",
+        help="Generate posterior visualization",
+    )
+    parser.add_argument(
+        "--max_local_contexts",
+        type=int,
+        default=2,
+        help="Max local contexts to show in visualization",
+    )
+    parser.add_argument(
+        "--plot_output_dir",
+        type=str,
+        default=None,
+        help="Directory for plots (uses output_dir if not specified)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging",
@@ -323,6 +400,11 @@ def main():
         seed=args.seed,
         num_samples=args.num_samples,
         n_l=args.n_l,
+        plot_posterior=args.plot_posterior,
+        max_local_contexts=args.max_local_contexts,
+        plot_output_dir=(
+            Path(args.plot_output_dir) if args.plot_output_dir else None
+        ),
         num_rounds=args.num_rounds,
         device=args.device,
         automatic_transforms_enabled=True,
