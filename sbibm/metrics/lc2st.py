@@ -63,9 +63,7 @@ def lc2st(
     xs = simulator(thetas)
 
     # Sample from posterior conditioned on observation
-    posterior_samples = posterior.sample((num_posterior_samples,))
-    if posterior_samples.ndim == 1:
-        posterior_samples = posterior_samples.reshape(-1, 1)
+    posterior_samples = posterior.sample((num_posterior_samples,), x=xs)
 
     # Initialize LC2ST
     lc2st_test = LC2ST(

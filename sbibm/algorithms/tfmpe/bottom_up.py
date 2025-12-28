@@ -528,7 +528,7 @@ def run(
     opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
 
     # Training parameters
-    n_samples_per_round = num_simulations // 2
+    n_samples_per_round = num_simulations
     n_val_samples = min(1000, num_simulations // 10)
     n_iter_per_round = 1000
     batch_size = 100
