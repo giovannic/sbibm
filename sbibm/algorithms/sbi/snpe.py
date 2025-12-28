@@ -12,6 +12,7 @@ from sbibm.algorithms.sbi.utils import (
     wrap_simulator_fn,
 )
 from sbibm.tasks.task import Task
+from sbibm.utils.nflows import FlowWrapper
 
 
 def run(
@@ -31,7 +32,7 @@ def run(
     z_score_theta: str = "independent",
     max_num_epochs: Optional[int] = 2**31 - 1,
     device: str = "cpu",
-) -> Tuple[torch.Tensor, int, Optional[torch.Tensor], object]:
+) -> Tuple[torch.Tensor, int, Optional[torch.Tensor], FlowWrapper]:
     """Runs (S)NPE from `sbi`
 
     Args:

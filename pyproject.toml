@@ -31,7 +31,7 @@ classifiers = [
 ]
 dependencies = [
     "autograd",
-    "elfi>=0.7.6",
+    #"elfi>=0.7.6",
     "deneb",
     "diffrax>=0.7.0",
     "future",
@@ -47,6 +47,8 @@ dependencies = [
     "scikit-learn",
     "torch>=1.8.0",
     "tqdm",
+    "pytorch-lightning>=2.6.0",
+    "einops>=0.8.1"
 ]
 
 [project.optional-dependencies]
@@ -60,7 +62,7 @@ dev = [
     "pytest-benchmark",
     "pytest-plt",
     "typeguard",
-    "tfmpe @ https://github.com/giovannic/tfmpe.git@feat/bottom_up"
+    #"tfmpe @ https://github.com/giovannic/tfmpe.git@feat/bottom_up"
 ]
 
 [project.urls]

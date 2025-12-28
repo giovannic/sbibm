@@ -68,11 +68,12 @@ class TFMPEPosterior:
         self.transforms = transforms
         self.context_tokens = context_tokens
 
-    def sample(self, shape):
+    def sample(self, shape, x=None):
         """Sample from posterior.
 
         Args:
             shape: Tuple of sample shape
+            x: (optional) torch matrix of contexts to sample from
 
         Returns:
             Flat tensor of samples with shape (num_samples, n_params)
@@ -109,8 +110,20 @@ class TFMPEPosterior:
 
         # Sample from posterior
         # TODO: Handle RNG seeding properly
+        if x is not None:
+            torch_context = x.reshape(x.shape[0], self.n_local, -1, 1)
+            context = { "y":  jnp.asarray(torch_context) }
+            context_tokens = Tokens.from_pytree(
+                context,
+                sample_ndims=1,
+                labeller=self.labeller,
+                independence=self.independence,
+            )
+        else:
+            context_tokens = self.context_tokens
+            
         posterior_tokens = self.tfmpe_model.sample_posterior(
-            context=self.context_tokens,
+            context=context_tokens,
             params=param_tokens,
         )
 
@@ -397,7 +410,7 @@ def run(
     num_observation: int,
     automatic_transforms_enabled: bool = False,
     **kwargs,
-) -> Tuple[torch.Tensor, int, torch.Tensor, object]:
+) -> Tuple[torch.Tensor, int, torch.Tensor, TFMPEPosterior]:
     """Run TFMPE bottom-up inference on a hierarchical task.
 
     Args:
