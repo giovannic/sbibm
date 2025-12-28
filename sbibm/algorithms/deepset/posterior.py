@@ -6,7 +6,7 @@ sbibm metrics and benchmarking.
 """
 
 import torch
-
+from .utils import reshape_observations
 
 class HierarchicalPosterior:
     """
@@ -40,11 +40,10 @@ class HierarchicalPosterior:
         # Encode observation to get contexts for posterior
         self._encode_observation()
 
-    def _encode_observation(self):
-        """Encode test observation to get global/local contexts."""
+    def _get_context(self, observation):
         with torch.no_grad():
             # Create batch of size 1 with observation
-            x_batch = self.observation.unsqueeze(0)  # (1, n_events, dim)
+            x_batch = observation.unsqueeze(0)  # (1, n_events, dim)
             n_batch = x_batch.shape[0]
 
             # Pad observation to match n_set_max if needed
@@ -71,7 +70,7 @@ class HierarchicalPosterior:
 
             # Create mask for valid observations
             mask = torch.ones(n_batch, n_set_max, device=self.device)
-            mask[:, self.observation.shape[0] :] = 0  # noqa: E203
+            mask[:, observation.shape[0] :] = 0  # noqa: E203
 
             # Split features
             x, x_local = torch.chunk(x_enc, 2, -1)
@@ -79,13 +78,74 @@ class HierarchicalPosterior:
             # Global aggregation
             x_global = x.sum(-2) / mask.sum(1)[:, None]
             x_global = torch.cat([x_global, mask.sum(1, keepdim=True)], -1)
-            self.global_context = self.model.deep_set.dec(x_global)
 
             # Local features
-            obs_len = self.observation.shape[0]
-            self.local_contexts = x_local[0, :obs_len]  # noqa: E203
+            obs_len = observation.shape[0]
+            local_contexts = x_local[0, :obs_len]  # noqa: E203
 
-    def sample(self, shape=()):
+            return self.model.deep_set.dec(x_global), local_contexts
+
+    def _encode_observation(self):
+        """Encode test observation to get global/local contexts."""
+        (
+            self.global_context,
+            self.local_contexts
+        ) = self._get_context(self.observation)
+
+    def _sample(self, num_samples, observation):
+        global_context, local_contexts = self._get_context(observation)
+        with torch.no_grad():
+            # Sample global parameters
+            # Note: flow.sample(num_samples, context) returns shape
+            # (context_batch, num_samples, features)
+            global_samples = self.model.deep_set.flow_global.sample(
+                num_samples,
+                context=global_context,
+            )
+            # Reshape from (1, num_samples, dim) to (num_samples, dim)
+            global_samples = global_samples.squeeze(0)
+
+            # Sample local parameters (conditioned on global if applicable)
+            num_events = observation.shape[0]
+            local_samples = []
+
+            if self.model.deep_set.condition_local_on_global:
+                # When conditioning local on global, need to sample each
+                # local parameter with the actual global sample values
+                for i in range(num_events):
+                    local_ctx = local_contexts[i : i + 1]  # noqa: E203
+                    # Concatenate with global samples
+                    local_ctx_expanded = torch.cat(
+                        [local_ctx.expand(num_samples, -1), global_samples],
+                        dim=-1,
+                    )
+                    # Now sample 1 sample per global sample
+                    local_sample = self.model.deep_set.flow_local.sample(
+                        1,
+                        context=local_ctx_expanded,
+                    )
+                    # Shape is (num_samples, 1, dim) -> squeeze to
+                    # (num_samples, dim)
+                    local_samples.append(local_sample.squeeze(1))
+            else:
+                # Sample all local parameters independently
+                for i in range(num_events):
+                    local_ctx = local_contexts[i : i + 1]  # noqa: E203
+                    local_sample = self.model.deep_set.flow_local.sample(
+                        num_samples,
+                        context=local_ctx,
+                    )
+                    # Reshape from (1, num_samples, dim) to (num_samples, dim)
+                    local_samples.append(local_sample.squeeze(0))
+
+            # Concatenate global and all local samples
+            all_local = torch.cat(local_samples, dim=-1)
+            samples = torch.cat([global_samples, all_local], dim=-1)
+
+            return samples
+
+
+    def sample(self, shape=(), x=None):
         """
         Sample from posterior.
 
@@ -103,56 +163,17 @@ class HierarchicalPosterior:
         for dim in shape:
             num_samples *= dim
 
-        with torch.no_grad():
-            # Sample global parameters
-            # Note: flow.sample(num_samples, context) returns shape
-            # (context_batch, num_samples, features)
-            global_samples = self.model.deep_set.flow_global.sample(
-                num_samples,
-                context=self.global_context,
-            )
-            # Reshape from (1, num_samples, dim) to (num_samples, dim)
-            global_samples = global_samples.squeeze(0)
+        if x is None:
+            samples = self._sample(num_samples, self.observation)
+        else:
+            x = reshape_observations(self.task, x)
+            samples = torch.cat([
+                self._sample(1, x[i])
+                for i in range(x.shape[0])
+            ])
+            return samples
 
-            # Sample local parameters (conditioned on global if applicable)
-            num_events = self.observation.shape[0]
-            local_samples = []
-
-            if self.model.deep_set.condition_local_on_global:
-                # When conditioning local on global, need to sample each
-                # local parameter with the actual global sample values
-                for i in range(num_events):
-                    local_ctx = self.local_contexts[i : i + 1]  # noqa: E203
-                    # Concatenate with global samples
-                    local_ctx_expanded = torch.cat(
-                        [local_ctx.expand(num_samples, -1), global_samples],
-                        dim=-1,
-                    )
-                    # Now sample 1 sample per global sample
-                    local_sample = self.model.deep_set.flow_local.sample(
-                        1,
-                        context=local_ctx_expanded,
-                    )
-                    # Shape is (num_samples, 1, dim) -> squeeze to
-                    # (num_samples, dim)
-                    local_samples.append(local_sample.squeeze(1))
-            else:
-                # Sample all local parameters independently
-                for i in range(num_events):
-                    local_ctx = self.local_contexts[i : i + 1]  # noqa: E203
-                    local_sample = self.model.deep_set.flow_local.sample(
-                        num_samples,
-                        context=local_ctx,
-                    )
-                    # Reshape from (1, num_samples, dim) to (num_samples, dim)
-                    local_samples.append(local_sample.squeeze(0))
-
-            # Concatenate global and all local samples
-            all_local = torch.cat(local_samples, dim=-1)
-            samples = torch.cat([global_samples, all_local], dim=-1)
-
-            # Reshape to requested shape
-            return samples.reshape(*shape, -1)
+        return samples.reshape(*shape, -1)
 
     def log_prob(self, theta):
         """

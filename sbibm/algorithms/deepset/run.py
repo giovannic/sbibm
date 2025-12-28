@@ -18,6 +18,7 @@ from sbibm.tasks.task import Task
 from .hierarchical_deepset import HierarchicalDeepSetInference
 from .posterior import HierarchicalPosterior
 from .training import train_hierarchical_deepset
+from .utils import reshape_observations
 
 
 def run(
@@ -75,7 +76,7 @@ def run(
     x_all = simulator(theta_all)
 
     theta_global, theta_local = _split_parameters(task, theta_all)
-    x_set = _reshape_observations(task, x_all)
+    x_set = reshape_observations(task, x_all)
 
     n_in = x_set.shape[-1]
     dim_global = theta_global.shape[-1]
@@ -108,7 +109,7 @@ def run(
     )
 
     observation_flat = task.get_observation(num_observation)
-    observation = _reshape_observations(task, observation_flat.unsqueeze(0))[0]
+    observation = reshape_observations(task, observation_flat.unsqueeze(0))[0]
 
     posterior = HierarchicalPosterior(trained_model, observation, task, device=device)
 
@@ -141,23 +142,3 @@ def _split_parameters(task: Task, theta: torch.Tensor):
     theta_local = theta_local_flat.reshape(theta.shape[0], n_l, dim_local)
 
     return theta_global, theta_local
-
-
-def _reshape_observations(task: Task, x: torch.Tensor):
-    """
-    Reshape flat observations to hierarchical structure.
-
-    Args:
-        task: Task instance
-        x: Observations, shape (batch, dim_data)
-
-    Returns:
-        x_set: Hierarchical observations,
-               shape (batch, num_events, dim_per_event)
-    """
-    batch_size = x.shape[0]
-    n_events = task.n_l
-    dim_per_event = x.shape[-1] // n_events
-
-    x_set = x.reshape(batch_size, n_events, dim_per_event)
-    return x_set
