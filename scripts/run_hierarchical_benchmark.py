@@ -182,9 +182,11 @@ def run_benchmark(
     # Extract key metrics from lc2st result dict
     results["lc2st_p_value"] = lc2st_result["p_value"].item()
     results["lc2st_test_statistic"] = lc2st_result["test_statistic"].item()
+    results["lc2st_critical_value"] = lc2st_result["critical_value"].item()
     results["lc2st_reject"] = lc2st_result["reject"].item()
     log.info(
         f"LC2ST p-value: {results['lc2st_p_value']:.4f}, "
+        f"critical_value: {results['lc2st_critical_value']:.4f}, "
         f"test_statistic: {results['lc2st_test_statistic']:.4f}, "
         f"reject: {results['lc2st_reject']}"
     )

@@ -19,8 +19,9 @@ class HierarchicalGaussianLinear(Task):
     def __init__(
         self,
         n_l: int = 5,
-        prior_scale: float = 0.1,
+        prior_scale: float = 1.0,
         simulator_scale: float = 0.1,
+        dim_local_per_context: int = 1
     ):
         """Hierarchical Gaussian Linear
 
@@ -31,36 +32,22 @@ class HierarchicalGaussianLinear(Task):
         This follows standard Bayesian regression where variance/scale is
         pooled globally and means/intercepts are estimated locally per group.
 
-        Total parameter space is divided as:
-            - 1 global noise scale parameter
-            - (dim - 1) / n_l local mean dimensions per context
-            - (dim - 1) total local mean parameters across all n_l contexts
-
-        Global parameters (dim_global=1):
-            - Noise scale shared across all contexts
-            - Prior: HalfNormal(simulator_scale)
-
-        Local parameters (dim_local_per_context per context,
-        dim_local_per_context * n_l total):
-            - Context-specific mean structure per context
-            - Prior: Normal(0, prior_scale * I) for each dimension
-
         Args:
             n_l: Number of local contexts (default: 5)
             prior_scale: Standard deviation of prior on local means (default:
                 0.1)
             simulator_scale: Scale parameter for HalfNormal prior on global
                 noise scale (default: 0.1)
+            dim_local_per_context: Number of observations per local context (default: 1)
         """
         self.n_l = n_l
         self.prior_scale = prior_scale
         self.simulator_scale = simulator_scale
 
         # Calculate dimensions: 1 global scale + n_l * dim_local_per_context locals
-        dim = n_l + 1
+        dim = n_l * dim_local_per_context + 1
 
         dim_global = 1
-        dim_local_per_context = (dim - 1) // n_l
         dim_local_total = dim - 1
 
         self.dim_global = dim_global

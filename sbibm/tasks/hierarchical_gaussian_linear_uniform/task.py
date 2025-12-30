@@ -22,6 +22,7 @@ class HierarchicalGaussianLinearUniform(Task):
         dim: int = 26,
         prior_bound: float = 10.0,
         simulator_scale: float = 0.1,
+        dim_local_per_context: int = 1,
         device: str = 'cpu'
     ):
         """Hierarchical Gaussian Linear Uniform
@@ -35,40 +36,22 @@ class HierarchicalGaussianLinearUniform(Task):
         pooled globally and means/intercepts are estimated locally per group
         with bounded support.
 
-        Total parameter space is divided as:
-            - 1 global noise scale parameter
-            - (dim - 1) / n_l local mean dimensions per context
-            - (dim - 1) total local mean parameters across all n_l contexts
-
-        Global parameters (dim_global=1):
-            - Noise scale shared across all contexts
-            - Prior: HalfNormal(simulator_scale)
-
-        Local parameters (dim_local_per_context per context,
-        dim_local_per_context * n_l total):
-            - Context-specific mean structure per context
-            - Prior: Uniform[-prior_bound, +prior_bound] for each dimension
 
         Args:
             n_l: Number of local contexts (default: 5)
-            dim: Total dimensionality of parameter space (default: 26,
-                which with default n_l=5 gives 1 + 5*5 = 26)
+            dim_local_per_context: Number of observations per local context (default: 1)
             prior_bound: Bound for uniform prior on local means
                 (default: 10.0)
             simulator_scale: Scale parameter for HalfNormal prior on global
                 noise scale (default: 0.1)
-
-        Raises:
-            ValueError: If (dim - 1) does not divide evenly by n_l
         """
         self.n_l = n_l
         self.prior_bound = torch.tensor(prior_bound, device=device)
         self.simulator_scale = torch.tensor(simulator_scale, device=device)
 
-        dim = n_l + 1
+        dim = n_l * dim_local_per_context + 1
 
         dim_global = 1
-        dim_local_per_context = (dim - 1) // n_l
         dim_local_total = dim - 1
 
         self.dim_global = dim_global
