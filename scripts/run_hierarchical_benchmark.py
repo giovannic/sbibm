@@ -177,7 +177,7 @@ def run_benchmark(
         task=task,
         num_observation=num_observation,
         num_calibration_samples=num_samples,
-        num_posterior_samples=num_samples,
+        posterior_samples=samples
     )
     # Extract key metrics from lc2st result dict
     results["lc2st_p_value"] = lc2st_result["p_value"].item()
@@ -212,15 +212,11 @@ def run_benchmark(
         # Slice samples and true params
         samples_sliced = samples[:, :num_dims_to_plot]
 
-        try:
-            true_params = (
-                task.get_true_parameters(num_observation=num_observation)
-                .numpy()
-                .flatten()[:num_dims_to_plot]
-            )
-        except Exception:
-            true_params = None
-            log.warning("True parameters not available for plotting")
+        true_params = (
+            task.get_true_parameters(num_observation=num_observation)
+            .numpy()
+            .flatten()[:num_dims_to_plot]
+        )
 
         # Create plot output path
         plot_dir = plot_output_dir if plot_output_dir else output_dir

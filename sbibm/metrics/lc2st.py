@@ -1,10 +1,20 @@
 import logging
 from typing import Any, Dict
 
-import torch
-from sbi.diagnostics.lc2st import LC2ST
-
 from sbibm.tasks.task import Task
+
+import torch
+
+from sfmpe.metrics.lc2st import (
+    BinaryMLPClassifier,
+    MultiBinaryMLPClassifier,
+    train_lc2st_classifiers,
+    evaluate_lc2st
+)
+
+from flax import nnx
+from jax import random as jr
+from jax import numpy as jnp
 
 log = logging.getLogger(__name__)
 
@@ -13,14 +23,13 @@ def lc2st(
     posterior: Any,
     task: Task,
     num_observation: int,
+    posterior_samples: torch.tensor,
     num_calibration_samples: int = 1000,
-    num_posterior_samples: int = 1000,
-    classifier: str = "mlp",
-    num_ensemble: int = 1,
     num_trials: int = 100,
+    n_epochs: int = 1000,
     alpha: float = 0.05,
     **kwargs: Any,
-) -> Dict[str, torch.Tensor]:
+) -> Dict[str, Any]:
     """Local Classifier Two-Sample Test (LC2ST) for posterior validation
 
     Tests if a classifier can distinguish between samples from
@@ -39,8 +48,6 @@ def lc2st(
             generate from prior for calibration
         num_posterior_samples: Number of samples to draw from
             posterior for testing
-        classifier: Classifier type ("mlp" or "rf")
-        num_ensemble: Number of classifiers in ensemble
         num_trials: Number of permutation trials for null hypothesis
         alpha: Significance level for hypothesis test
         **kwargs: Additional arguments passed to LC2ST
@@ -63,42 +70,61 @@ def lc2st(
     xs = simulator(thetas)
 
     # Sample from posterior conditioned on observation
-    posterior_samples = posterior.sample((num_posterior_samples,), x=xs)
+    num_posterior_samples = posterior_samples.shape[0]
+    theta_q = posterior.sample((num_posterior_samples,), x=xs)
 
-    # Initialize LC2ST
-    lc2st_test = LC2ST(
-        thetas=thetas,
-        xs=xs,
-        posterior_samples=posterior_samples,
-        classifier=classifier,
-        num_ensemble=num_ensemble,
-        num_trials_null=num_trials,
+    n_layers = 1
+    latent_dim = 16
+    key = jr.PRNGKey(0)
+    rngs = nnx.Rngs(0)
+
+    main = BinaryMLPClassifier(
+        dim=xs.shape[1] + thetas.shape[1],
+        latent_dim = latent_dim,
+        n_layers=n_layers,
+        activation=nnx.relu,
+        rngs=rngs,
     )
 
-    # Train under null hypothesis for permutation test
-    lc2st_test.train_under_null_hypothesis()
-
-    # Train on observed data
-    lc2st_test.train_on_observed_data()
-
-    # Get statistics (theta_o and x_o are passed to evaluation methods)
-    theta_o = task.get_true_parameters(num_observation)
-    x_o = observation
-
-    p_val = lc2st_test.p_value(theta_o=theta_o, x_o=x_o)
-    test_stat = lc2st_test.get_statistic_on_observed_data(theta_o=theta_o, x_o=x_o)
-
-    # Get null distribution statistics for critical value
-    null_stats = lc2st_test.get_statistics_under_null_hypothesis(
-        theta_o=theta_o, x_o=x_o
+    null_classifier = MultiBinaryMLPClassifier(
+        dim=xs.shape[1] + thetas.shape[1],
+        latent_dim=latent_dim,
+        n_layers=n_layers,
+        activation=nnx.relu,
+        n=num_trials,
+        rngs=rngs,
     )
-    critical_value = torch.quantile(torch.tensor(null_stats), 1.0 - alpha)
 
-    reject = lc2st_test.reject_test(theta_o=theta_o, x_o=x_o, alpha=alpha)
+    train_key, key = jr.split(key)
+    d_cal = (
+        jnp.array(xs),
+        jnp.array(thetas),
+        jnp.array(theta_q)
+    )
+
+
+    print('Training LC2ST classifiers')
+    train_lc2st_classifiers(
+        train_key,
+        d_cal,
+        main,
+        null_classifier,
+        n_epochs
+    )
+
+    print('Evaluating LC2ST statistics')
+    null_stats, main_stat, p_value = evaluate_lc2st(
+        jnp.array(observation)[0],
+        jnp.array(posterior_samples),
+        main,
+        null_classifier,
+    )
+
+    critical_value = jnp.quantile(null_stats, 1 - alpha)
 
     return {
-        "p_value": torch.tensor(p_val),
-        "test_statistic": torch.tensor(test_stat),
+        "p_value": p_value,
+        "test_statistic": main_stat,
         "critical_value": critical_value,
-        "reject": torch.tensor(reject),
+        "reject": main_stat > critical_value,
     }

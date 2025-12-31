@@ -20,7 +20,7 @@ class HierarchicalGaussianLinear(Task):
         self,
         n_l: int = 5,
         prior_scale: float = 1.0,
-        simulator_scale: float = 0.1,
+        simulator_scale: float = 1.0,
         dim_local_per_context: int = 1
     ):
         """Hierarchical Gaussian Linear

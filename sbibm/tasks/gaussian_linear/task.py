@@ -11,7 +11,7 @@ from sbibm.tasks.task import Task
 
 class GaussianLinear(Task):
     def __init__(
-        self, dim: int = 10, prior_scale: float = 0.1, simulator_scale: float = 0.1
+        self, dim: int = 10, prior_scale: float = 0.1, simulator_scale: float = 1.
     ):
         """Gaussian Linear
 

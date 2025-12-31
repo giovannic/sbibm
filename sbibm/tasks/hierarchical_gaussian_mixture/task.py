@@ -21,7 +21,7 @@ class HierarchicalGaussianMixture(Task):
     def __init__(
         self,
         n_l: int = 5,
-        dim: int = 2,
+        dim: int = 1,
         prior_bound: float = 10.0,
     ):
         """Hierarchical Gaussian Mixture
@@ -49,7 +49,7 @@ class HierarchicalGaussianMixture(Task):
         Args:
             n_l: Number of local contexts (default: 5)
             dim: Dimensionality of parameters and data per context
-                (default: 2)
+                (default: 1)
             prior_bound: Prior bound for location parameters
                 (default: 10.0)
         """
