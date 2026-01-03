@@ -55,7 +55,7 @@ class HierarchicalSLCP(Task):
 
         super().__init__(
             dim_parameters=3 + 2 * n_l,  # 3 global + 2*n_l local
-            dim_data=8 * n_l,  # 8D observation per context (4 obs * 2D)
+            dim_data=self.num_data * 2 * n_l,
             name="hierarchical_slcp",
             name_display="Hierarchical SLCP",
             num_observations=10,

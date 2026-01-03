@@ -405,7 +405,7 @@ def main():
         ),
         num_rounds=args.num_rounds,
         device=args.device,
-        automatic_transforms_enabled=True,
+        automatic_transforms_enabled=True
     )
 
     # Save results

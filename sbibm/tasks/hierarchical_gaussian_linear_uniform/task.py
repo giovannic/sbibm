@@ -19,7 +19,6 @@ class HierarchicalGaussianLinearUniform(Task):
     def __init__(
         self,
         n_l: int = 5,
-        dim: int = 26,
         prior_bound: float = 10.0,
         simulator_scale: float = 1.,
         dim_local_per_context: int = 1,

@@ -3,6 +3,7 @@
 import time
 from math import prod
 from typing import Dict, List, Tuple
+from jaxtyping import Array
 
 import diffrax
 import jax
@@ -39,6 +40,8 @@ class TFMPEPosterior:
         global_names,
         local_names,
         n_local,
+        params_f_in,
+        context_f_in,
         transforms=None,
         context_tokens=None,
     ):
@@ -67,6 +70,8 @@ class TFMPEPosterior:
         self.n_local = n_local
         self.transforms = transforms
         self.context_tokens = context_tokens
+        self.params_f_in = params_f_in
+        self.context_f_in = context_f_in
 
     def sample(self, shape, x=None):
         """Sample from posterior.
@@ -106,6 +111,7 @@ class TFMPEPosterior:
             sample_ndims=1,
             labeller=self.labeller,
             independence=self.independence,
+            functional_inputs=self.params_f_in
         )
 
         # Sample from posterior
@@ -118,6 +124,7 @@ class TFMPEPosterior:
                 sample_ndims=1,
                 labeller=self.labeller,
                 independence=self.independence,
+                functional_inputs=self.context_f_in
             )
         else:
             context_tokens = self.context_tokens
@@ -234,9 +241,9 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
         Returns:
             Dictionary where:
             - 'p_g_{i}': i-th global component with shape
-              (n_samples, batch_shape, event_shape)
+              (n_samples, event_shape, 1)
             - 'p_l_{j}': j-th local component with shape
-              (n_samples, n_local, batch_shape, event_shape)
+              (n_samples, n_local, event_shape, 1)
         """
         slices = _get_slices(task, n)
         prior_dist = task.prior_dist.for_n_local(n)
@@ -260,7 +267,10 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
                 component_params = component_params.reshape(n_samples, n, -1)
             param_dict[name] = component_params[..., None]
 
-        return param_dict
+        # Add sequential functional inputs for local components
+        f_in = enumerate_dict(param_dict)
+
+        return param_dict, f_in
 
     return prior_fn
 
@@ -286,7 +296,7 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
 
         Returns:
             Dictionary with 'y' key containing observations
-            shaped (n_samples, n, 2, 1)
+            shaped (n_samples, n, n_events, 1)
         """
         slices = _get_slices(task, n)
         params_list = [
@@ -308,8 +318,10 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
         obs_jax = jnp.asarray(obs_torch.numpy()).reshape(
             obs_torch.shape[0], n, -1, 1
         )
+        obs_dict = {"y": obs_jax}
+        f_in = enumerate_dict(obs_dict)
 
-        return {"y": obs_jax}
+        return obs_dict, f_in
 
     return simulator_fn
 
@@ -398,7 +410,9 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False):
                 reshaped_jax = jnp.asarray(reshaped[..., None])
                 local_params_dict[name] = reshaped_jax
 
-        return local_params_dict
+        f_in = enumerate_dict(local_params_dict)
+
+        return local_params_dict, f_in
 
     return local_fn
 
@@ -470,7 +484,7 @@ def run(
     # Generate sample data for token creation
     rng = jax.random.PRNGKey(42)
     rng, key = jax.random.split(rng)
-    sample_params = prior_fn(
+    sample_params, params_f_in = prior_fn(
         key, n=n_local, n_samples=10
     )
 
@@ -485,7 +499,7 @@ def run(
         ] + [
             ("y", name, (0, 0)) for name in local_names
         ],
-        local = local_names + ['y']
+        local_grouped = [(name, 0) for name in local_names + ['y']]
     )
 
     # Create tokens from sample data
@@ -494,6 +508,7 @@ def run(
         sample_ndims=1,
         labeller=labeller,
         independence=independence,
+        functional_inputs=params_f_in
     )
 
     # Initialize TFMPE model
@@ -556,14 +571,16 @@ def run(
 
     # Generate posterior samples using trained TFMPE
     # Create context tokens from observation
+    y_f_in = enumerate_dict(y_obs_dict)
     context_tokens = Tokens.from_pytree(
         y_obs_dict,
         sample_ndims=1,
         labeller=labeller,
+        functional_inputs = y_f_in
     )
 
     # Create parameter tokens template for sampling
-    param_dict_template = prior_fn(rng, n=n_local, n_samples=1)
+    param_dict_template, param_f_in = prior_fn(rng, n=n_local, n_samples=1)
     param_dict_samples = {
         key: jnp.tile(value, (num_samples,) + (1,) * (value.ndim - 1))
         for key, value in param_dict_template.items()
@@ -574,6 +591,10 @@ def run(
         sample_ndims=1,
         labeller=labeller,
         independence=independence,
+        functional_inputs=jax.tree.map(
+            lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
+            param_f_in
+        )
     )
 
     # Sample from posterior
@@ -609,6 +630,14 @@ def run(
         n_local=n_local,
         transforms=transforms if automatic_transforms_enabled else None,
         context_tokens=context_tokens,
+        params_f_in=jax.tree.map(
+            lambda leaf: jnp.broadcast_to(leaf[0:1], (num_samples,) + leaf.shape[1:]),
+            params_f_in
+        ),
+        context_f_in=jax.tree.map(
+            lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
+            y_f_in
+        )
     )
 
     # Compute log probability at true parameters
@@ -620,3 +649,30 @@ def run(
     return posterior_samples, num_simulations, log_prob_true_params, (
         posterior_wrapped
     )
+
+def enumerate_local(value):
+    """
+    enumerate the events of local variables of shape (num_samples, n_groups, n_events, 1)
+    """
+    return jnp.broadcast_to(
+        jnp.arange(value.shape[2])[None, None, :, None],
+        value.shape
+    )
+
+def enumerate_global(value):
+    """
+    enumerate the events of global variables of shape (num_samples, n_events, 1)
+    """
+    return jnp.broadcast_to(
+        jnp.arange(value.shape[1])[None, :, None],
+        value.shape
+    )
+
+def enumerate_dict(d: Dict[str, Array]):
+    return {
+        name: enumerate_local(value)
+        if str.startswith(name, 'p_l_')
+        or name == 'y'
+        else enumerate_global(value)
+        for name, value in d.items()
+    }
