@@ -267,10 +267,7 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
                 component_params = component_params.reshape(n_samples, n, -1)
             param_dict[name] = component_params[..., None]
 
-        # Add sequential functional inputs for local components
-        f_in = enumerate_dict(param_dict)
-
-        return param_dict, f_in
+        return param_dict, None
 
     return prior_fn
 
@@ -319,9 +316,8 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
             obs_torch.shape[0], n, -1, 1
         )
         obs_dict = {"y": obs_jax}
-        f_in = enumerate_dict(obs_dict)
 
-        return obs_dict, f_in
+        return obs_dict, None
 
     return simulator_fn
 
@@ -410,9 +406,7 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False):
                 reshaped_jax = jnp.asarray(reshaped[..., None])
                 local_params_dict[name] = reshaped_jax
 
-        f_in = enumerate_dict(local_params_dict)
-
-        return local_params_dict, f_in
+        return local_params_dict, None
 
     return local_fn
 
@@ -498,8 +492,7 @@ def run(
             (name, "y", (0, 0)) for name in local_names
         ] + [
             ("y", name, (0, 0)) for name in local_names
-        ],
-        local_grouped = [(name, 0) for name in local_names + ['y']]
+        ]
     )
 
     # Create tokens from sample data
@@ -571,12 +564,10 @@ def run(
 
     # Generate posterior samples using trained TFMPE
     # Create context tokens from observation
-    y_f_in = enumerate_dict(y_obs_dict)
     context_tokens = Tokens.from_pytree(
         y_obs_dict,
         sample_ndims=1,
-        labeller=labeller,
-        functional_inputs = y_f_in
+        labeller=labeller
     )
 
     # Create parameter tokens template for sampling
@@ -649,30 +640,3 @@ def run(
     return posterior_samples, num_simulations, log_prob_true_params, (
         posterior_wrapped
     )
-
-def enumerate_local(value):
-    """
-    enumerate the events of local variables of shape (num_samples, n_groups, n_events, 1)
-    """
-    return jnp.broadcast_to(
-        jnp.arange(value.shape[2])[None, None, :, None],
-        value.shape
-    )
-
-def enumerate_global(value):
-    """
-    enumerate the events of global variables of shape (num_samples, n_events, 1)
-    """
-    return jnp.broadcast_to(
-        jnp.arange(value.shape[1])[None, :, None],
-        value.shape
-    )
-
-def enumerate_dict(d: Dict[str, Array]):
-    return {
-        name: enumerate_local(value)
-        if str.startswith(name, 'p_l_')
-        or name == 'y'
-        else enumerate_global(value)
-        for name, value in d.items()
-    }
