@@ -564,10 +564,12 @@ def run(
 
     # Generate posterior samples using trained TFMPE
     # Create context tokens from observation
+    y_f_in = None # TODO: this must be set for models with functional observations
     context_tokens = Tokens.from_pytree(
         y_obs_dict,
         sample_ndims=1,
-        labeller=labeller
+        labeller=labeller,
+        functional_inputs=y_f_in
     )
 
     # Create parameter tokens template for sampling
