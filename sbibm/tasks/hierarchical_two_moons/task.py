@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pyro
 import torch
@@ -84,8 +84,8 @@ class HierarchicalTwoMoons(Task):
 
         # Define hierarchical prior distribution
         # Global parameters: [loc_0, loc_1, scale_0, scale_1]
-        global_loc_dist = pdist.Uniform(-1.0, 1.0).expand([2]).to_event(1)
-        global_scale_dist = pdist.Uniform(0.1, 3.0).expand([2]).to_event(1)
+        global_loc_dist = pdist.Uniform(-1.0, 1.0, validate_args=False).expand([2]).to_event(1)
+        global_scale_dist = pdist.Uniform(0.1, 3.0, validate_args=False).expand([2]).to_event(1)
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
@@ -113,7 +113,13 @@ class HierarchicalTwoMoons(Task):
             )
 
             return pdist.Independent(
-                TruncatedNormal(locs_expanded, scales_expanded, -1.0, 1.0),
+                TruncatedNormal(
+                    locs_expanded,
+                    scales_expanded,
+                    -1.0,
+                    1.0,
+                    validate_args=False
+                ),
                 1,
             )
 

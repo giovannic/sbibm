@@ -95,9 +95,9 @@ class HierarchicalGaussianMixture(Task):
         # Global parameters: [loc_0, ..., loc_{dim-1}, scale_0, ...,
         # scale_{dim-1}]
         global_loc_dist = (
-            pdist.Uniform(-prior_bound, prior_bound).expand([dim]).to_event(1)
+            pdist.Uniform(-prior_bound, prior_bound, validate_args=False).expand([dim]).to_event(1)
         )
-        global_scale_dist = pdist.HalfNormal(1.0).expand([dim]).to_event(1)
+        global_scale_dist = pdist.HalfNormal(1.0, validate_args=False).expand([dim]).to_event(1)
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
@@ -129,6 +129,7 @@ class HierarchicalGaussianMixture(Task):
                     scale=scales_expanded,
                     low=-prior_bound,
                     high=+prior_bound,
+                    validate_args=False
                 ),
                 1,
             )

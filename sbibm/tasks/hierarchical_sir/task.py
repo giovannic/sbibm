@@ -108,6 +108,7 @@ class HierarchicalSIR(Task):
         global_dist = pdist.LogNormal(
             loc=torch.tensor([math.log(0.125)]),
             scale=torch.tensor([0.2]),
+            validate_args=False
         ).to_event(1)
 
         # Local parameters: beta_i (transmission rates per region)
@@ -119,6 +120,7 @@ class HierarchicalSIR(Task):
                 pdist.LogNormal(
                     loc=torch.tensor(math.log(0.4)),
                     scale=torch.tensor(0.5),
+                    validate_args=False
                 ).expand(list(batch_shape) + [n_local]),
                 1,
             )

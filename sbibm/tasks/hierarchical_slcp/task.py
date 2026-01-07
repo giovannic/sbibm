@@ -69,8 +69,8 @@ class HierarchicalSLCP(Task):
         # Define hierarchical prior distribution
         # Global parameters: [s1, s2, rho]
         # s1, s2 ~ Uniform(0.5, 3.0), rho ~ Uniform(-3, 3)
-        s_dist = pdist.Uniform(-3.0, 3.0).expand([2]).to_event(1)
-        rho_dist = pdist.Uniform(-3.0, 3.0).expand([1]).to_event(1)
+        s_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([2]).to_event(1)
+        rho_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([1]).to_event(1)
         global_dist = BlockwiseDistribution([s_dist, rho_dist])
 
         # Local params distribution: means for each context
@@ -79,7 +79,7 @@ class HierarchicalSLCP(Task):
             # local_params: 2*n_local_arg dims, all ~ Uniform(-3, 3)
             batch_shape = global_params.shape[:-1]
             local_dist = (
-                pdist.Uniform(-3.0, 3.0)
+                pdist.Uniform(-3.0, 3.0, validate_args=False)
                 .expand(list(batch_shape) + [2 * n_local_arg])
                 .to_event(1)
             )

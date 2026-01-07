@@ -87,7 +87,7 @@ class HierarchicalGaussianLinearUniform(Task):
         # Define hierarchical prior distribution
         # Global parameters: shared noise scale (dim_global=1)
         global_dist = pdist.Independent(
-            pdist.HalfNormal(self.simulator_scale).expand([1]), 1
+            pdist.HalfNormal(self.simulator_scale, validate_args=False).expand([1]), 1
         )
 
         # Local parameters: context-specific means bounded by uniform prior
@@ -102,6 +102,7 @@ class HierarchicalGaussianLinearUniform(Task):
                 pdist.Uniform(
                     low=-prior_bound * torch.ones(dim_local, device=device),
                     high=+prior_bound * torch.ones(dim_local, device=device),
+                    validate_args=False
                 ).expand(list(batch_shape) + [dim_local]),
                 1,
             )

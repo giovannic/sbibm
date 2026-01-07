@@ -86,7 +86,7 @@ class HierarchicalGaussianLinear(Task):
         # Expand([1]) to get batch_shape=[], event_shape=[1], then use expand_by
         # to ensure proper 2D sampling
         global_dist = pdist.Independent(
-            pdist.HalfNormal(simulator_scale).expand([1]), 1
+            pdist.HalfNormal(simulator_scale, validate_args=False).expand([1]), 1
         )
 
         # Local parameters: context-specific means
