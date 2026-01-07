@@ -85,7 +85,7 @@ class HierarchicalTwoMoons(Task):
         # Define hierarchical prior distribution
         # Global parameters: [loc_0, loc_1, scale_0, scale_1]
         global_loc_dist = pdist.Uniform(-1.0, 1.0).expand([2]).to_event(1)
-        global_scale_dist = pdist.HalfNormal(0.5).expand([2]).to_event(1)
+        global_scale_dist = pdist.Uniform(0.1, 3.0).expand([2]).to_event(1)
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
@@ -94,7 +94,7 @@ class HierarchicalTwoMoons(Task):
             # n_local: number of local groups/contexts
             # Extract locs and scales
             locs = global_params[..., :2]  # [..., 2]
-            scales = global_params[..., 2:4]  # [..., 2]
+            scales = global_params[..., 2:4]  ** 2 # [..., 2]
 
             # Create distribution for n_local groups
             # Each local context (2D) is TruncatedNormal(loc,
@@ -222,9 +222,9 @@ class HierarchicalTwoMoons(Task):
         for _ in range(2):
             transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
 
-        # global_scale: HalfNormal (R+) <-> R
+        # global_scale: Uniform[0.1, 1.0] <-> R
         for _ in range(2):
-            transforms_list.append(biject_to(constraints.positive))
+            transforms_list.append(biject_to(constraints.interval(0.1, 1.0)))
 
         # local params: TruncatedNormal[-1, 1] <-> R
         for _ in range(2 * n_l):
