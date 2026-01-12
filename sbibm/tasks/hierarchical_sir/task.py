@@ -305,13 +305,6 @@ class HierarchicalSIR(Task):
         trajectories_np = numpy.asarray(trajectories_jax).copy()
         trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
 
-        # Verify shape and handle NaN from failed ODE solves
-        expected_shape = torch.Size(
-            [num_samples, n_local, 3, int(self.dim_data_raw / 3)]
-        )
-        if trajectories.shape != expected_shape:
-            trajectories = float("nan") * torch.ones(expected_shape)
-
         return trajectories.float()
 
     def get_labels_parameters(self):

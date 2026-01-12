@@ -25,7 +25,7 @@ class HierarchicalLotkaVolterra(Task):
         self,
         n_l: int = 5,
         days: float = 20.0,
-        saveat: float = 0.2,
+        saveat: float = 5.,
         total_count: int = 100,
     ):
         """Hierarchical Lotka-Volterra model with partial pooling.
@@ -59,7 +59,7 @@ class HierarchicalLotkaVolterra(Task):
         Args:
             n_l: Number of local contexts/sites (default: 5)
             days: Number of days to simulate (default: 20.0)
-            saveat: Time step for saving trajectory (default: 0.2)
+            saveat: Time step for saving trajectory (default: 2.)
             total_count: Scaling factor for Poisson observations
                 (default: 100)
         """
@@ -68,11 +68,9 @@ class HierarchicalLotkaVolterra(Task):
         self.saveat = saveat
         self.total_count = total_count
 
-        # Calculate raw data dimensions
-        # For subsampling: every 21st time point from trajectory
-        # Original: int(days/saveat + 1) = 101 points, subsample -> 5
-        # Per site: 2 species * 5 time points = 10 observations
-        dim_data = 10 * n_l
+        # Calculate data dimensions:
+        # Species * locales * observations
+        dim_data = 2 * n_l * (int(days / saveat) + 1)
 
         # Observation seeds
         observation_seeds = [
@@ -107,21 +105,21 @@ class HierarchicalLotkaVolterra(Task):
         # Use smaller scale for hyperprior scales (0.5) to avoid extreme
         # parameter values that cause ODE solver failures
         global_components = [
-            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            pdist.Independent(pdist.Normal(0.0, 0.1).expand([1]), 1),
             # mu_alpha
-            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            pdist.Independent(pdist.Normal(0.0, 0.1).expand([1]), 1),
             # mu_beta
-            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            pdist.Independent(pdist.Normal(0.0, 0.1).expand([1]), 1),
             # mu_gamma
-            pdist.Independent(pdist.Normal(0.0, 1.0).expand([1]), 1),
+            pdist.Independent(pdist.Normal(0.0, 0.1).expand([1]), 1),
             # mu_delta
-            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            pdist.Independent(pdist.Exponential(1.).expand([1]), 1),
             # sigma_alpha
-            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            pdist.Independent(pdist.Exponential(1.).expand([1]), 1),
             # sigma_beta
-            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            pdist.Independent(pdist.Exponential(1.).expand([1]), 1),
             # sigma_gamma
-            pdist.Independent(pdist.HalfNormal(0.5).expand([1]), 1),
+            pdist.Independent(pdist.Exponential(1.).expand([1]), 1),
             # sigma_delta
         ]
 
@@ -343,14 +341,6 @@ class HierarchicalLotkaVolterra(Task):
         # Convert back to PyTorch
         trajectories_np = numpy.asarray(trajectories_jax).copy()
         trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
-
-        # Verify shape and handle NaN from failed ODE solves
-        expected_shape = torch.Size(
-            [num_samples, n_l, 2, int(self.days / self.saveat) + 1]
-        )
-        if trajectories.shape != expected_shape:
-            trajectories = float("nan") * torch.ones(expected_shape)
-
         return trajectories.float()
 
     def get_prior(self):
@@ -428,52 +418,18 @@ class HierarchicalLotkaVolterra(Task):
 
             Returns LogNormal-distributed observations.
             """
-            num_samples = parameters.shape[0]
-
-            # Extract local parameters and infer n_l from shape
-            local_params = parameters[:, 8:]
-            n_l = local_params.shape[1] // 4
-
             # Solve ODE for all parameters and sites
             # Returns (num_samples, n_l, 2, num_timepoints)
             all_observations = self.solve_ode_trajectories(parameters)
+            num_samples = all_observations.shape[0]
+            dist = pdist.LogNormal(
+                loc=torch.log(all_observations.clamp(1e-10, 10000.0)),
+                scale=0.1,
+            ).to_event(1)
 
-            data = []
-            for b in range(num_samples):
-                context_data = []
-
-                # For each local context (site)
-                for i in range(n_l):
-                    # Get trajectory for this site
-                    u = all_observations[b, i, :, :]  # (2, timepoints)
-
-                    # Check for NaN
-                    if torch.isnan(u).any():
-                        context_data.append(float("nan") * torch.ones(10))
-                        continue
-
-                    # Subsample every 21st time point
-                    u_sub = u[:, ::21]  # (2, 5)
-
-                    # Flatten to (10,)
-                    u_flat = u_sub.flatten()
-
-                    # Clamp to ensure valid log values
-                    u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
-
-                    # Sample from LogNormal distribution
-                    lognormal_dist = pdist.LogNormal(
-                        loc=torch.log(u_flat_clamped),
-                        scale=0.1,
-                    )
-                    obs = lognormal_dist.sample()
-
-                    context_data.append(obs)
-
-                # Concatenate all contexts
-                data.append(torch.cat(context_data))
-
-            return torch.stack(data).float()
+            data = dist.sample()
+            data = data.reshape((num_samples, -1))
+            return data
 
         return Simulator(task=self, simulator=simulator, max_calls=max_calls)
 
@@ -506,49 +462,16 @@ class HierarchicalLotkaVolterra(Task):
 
         # Solve ODE for all parameters and sites
         all_observations = self.solve_ode_trajectories(parameters)
+        dist = pdist.LogNormal(
+            loc=torch.log(all_observations.clamp(1e-10, 10000.0)).reshape(num_samples, -1),
+            scale=0.1,
+        ).to_event(1)
 
-        log_likelihoods = []
-
-        for b in range(num_samples):
-            log_lik_sample = 0.0
-
-            # For each local context (site)
-            for i in range(self.n_l):
-                # Get trajectory for this site
-                u = all_observations[b, i, :, :]  # (2, timepoints)
-
-                # Check for NaN
-                if torch.isnan(u).any():
-                    log_lik_sample = float("-inf")
-                    break
-
-                # Subsample every 21st time point
-                u_sub = u[:, ::21]  # (2, 5)
-                u_flat = u_sub.flatten()  # (10,)
-
-                # Clamp to ensure valid log values
-                u_flat_clamped = u_flat.clamp(min=1e-10, max=10000.0)
-
-                # Get observed data for this context
-                obs = data[b, i * 10 : (i + 1) * 10]  # noqa: E203
-
-                # Compute LogNormal log-likelihood
-                lognormal_dist = torch.distributions.LogNormal(
-                    loc=torch.log(u_flat_clamped),
-                    scale=0.1,
-                )
-                log_lik_context = lognormal_dist.log_prob(obs).sum()
-
-                log_lik_sample += log_lik_context
-
-            log_likelihoods.append(log_lik_sample)
-
-        log_lik_tensor = torch.tensor(log_likelihoods)
-
+        log_lik = dist.log_prob(data)
         if log:
-            return log_lik_tensor
+            return log_lik
         else:
-            return torch.exp(log_lik_tensor)
+            return torch.exp(log_lik)
 
     def unflatten_data(self, data: torch.Tensor) -> torch.Tensor:
         """Unflattens data into multiple observations per site"""
