@@ -488,11 +488,11 @@ def run(
     # Define independence: each local param[i] attends
     # only to y[i]
     independence = Independence(
-        cross_local = [
-            (name, "y", (0, 0)) for name in local_names
-        ] + [
-            ("y", name, (0, 0)) for name in local_names
-        ]
+        # cross_local = [
+            # (name, "y", (0, 0)) for name in local_names
+        # ] + [
+            # ("y", name, (0, 0)) for name in local_names
+        # ]
     )
 
     # Create tokens from sample data
