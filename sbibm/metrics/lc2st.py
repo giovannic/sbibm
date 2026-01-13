@@ -23,7 +23,7 @@ def lc2st(
     posterior: Any,
     task: Task,
     num_observation: int,
-    posterior_samples: torch.tensor,
+    posterior_samples: torch.Tensor,
     num_calibration_samples: int = 1000,
     num_trials: int = 100,
     n_epochs: int = 1000,
@@ -70,8 +70,7 @@ def lc2st(
     xs = simulator(thetas)
 
     # Sample from posterior conditioned on observation
-    num_posterior_samples = posterior_samples.shape[0]
-    theta_q = posterior.sample((num_posterior_samples,), x=xs)
+    theta_q = posterior.sample((num_calibration_samples,), x=xs)
 
     n_layers = 1
     latent_dim = 16

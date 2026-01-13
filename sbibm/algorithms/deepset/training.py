@@ -48,6 +48,19 @@ def train_hierarchical_deepset(
     y_local = y_local.to(device)
     y_global = y_global.to(device)
 
+    # Precompute set mask
+    n_set_max = model.deep_set.n_set_max
+    set_size = torch.randint(
+        low=1,
+        high=n_set_max + 1,
+        size=(x_set.shape[0],),
+        dtype=torch.float,
+    )
+    mask = (
+        torch.arange(n_set_max).expand(len(set_size), n_set_max)
+        < torch.Tensor(set_size)[:, None]
+    ).to(x_set.device)
+
     # Create train/val split
     num_train = int(len(x_set) * (1 - validation_split))
     indices = torch.randperm(len(x_set))
@@ -59,11 +72,15 @@ def train_hierarchical_deepset(
         x_set[train_indices],
         y_local[train_indices],
         y_global[train_indices],
+        set_size[train_indices],
+        mask[train_indices],
     )
     val_dataset = TensorDataset(
         x_set[val_indices],
         y_local[val_indices],
         y_global[val_indices],
+        set_size[val_indices],
+        mask[val_indices],
     )
 
     # Create dataloaders

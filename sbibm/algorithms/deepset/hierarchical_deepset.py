@@ -78,20 +78,7 @@ class HierarchicalDeepSet(nn.Module):
             hidden_features=int(2 * dim_hidden),
         )
 
-    def forward(self, x, y_local, y_global):
-        n_batch = x.shape[0]
-
-        set_size = torch.randint(
-            low=1,
-            high=self.n_set_max + 1,
-            size=(n_batch,),
-            dtype=torch.float,
-        )
-        mask = (
-            torch.arange(self.n_set_max).expand(len(set_size), self.n_set_max)
-            < torch.Tensor(set_size)[:, None]
-        ).to(x.device)
-
+    def forward(self, x, y_local, y_global, set_size, mask):
         # Flatten to (batch*n_set, n_in) for per-event encoding
         assert (
             x.ndim == 3
@@ -204,8 +191,8 @@ class HierarchicalDeepSetInference(pl.LightningModule):
             num_transforms=num_transforms,
         )
 
-    def forward(self, x, y_local, y_global):
-        log_prob = self.deep_set(x, y_local, y_global)
+    def forward(self, x, y_local, y_global, set_size, mask):
+        log_prob = self.deep_set(x, y_local, y_global, set_size, mask)
         return log_prob
 
     def configure_optimizers(self):
@@ -224,8 +211,8 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        x, y_local, y_global = batch
-        log_prob_local, log_prob_global = self(x, y_local, y_global)
+        x, y_local, y_global, set_size, mask = batch
+        log_prob_local, log_prob_global = self(x, y_local, y_global, set_size, mask)
         log_prob = torch.zeros_like(log_prob_local).to(log_prob_local.device)
         if self.local_loss:
             log_prob += log_prob_local
@@ -236,8 +223,8 @@ class HierarchicalDeepSetInference(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        x, y_local, y_global = batch
-        log_prob_local, log_prob_global = self(x, y_local, y_global)
+        x, y_local, y_global, set_size, mask = batch
+        log_prob_local, log_prob_global = self(x, y_local, y_global, set_size, mask)
         log_prob = torch.zeros_like(log_prob_local).to(log_prob_local.device)
         if self.local_loss:
             log_prob += log_prob_local
