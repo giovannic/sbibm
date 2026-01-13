@@ -97,6 +97,13 @@ def run_benchmark(
             f"Reducing SNPE simulations by factor of n_l={n_l}: "
             f"{num_simulations} -> {adjusted_num_simulations}"
         )
+    if algorithm == "deepset" and n_l > 1:
+        n_sim_per_sample = ((n_l + 1) // 2)
+        adjusted_num_simulations = num_simulations // n_sim_per_sample
+        log.info(
+            f"Reducing DeepSet simulations to account for set sampling: "
+            f"{num_simulations} -> {adjusted_num_simulations}"
+        )
 
     # Import algorithm
     log.info(f"Importing algorithm: {algorithm}")

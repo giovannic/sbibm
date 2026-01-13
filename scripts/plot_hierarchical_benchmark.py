@@ -77,10 +77,16 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
         if n_l > 1:
             df = results[task_name]
             snpe_mask = df["algorithm"] == "snpe"
+            deepset_mask = df["algorithm"] == "deepset"
 
             if snpe_mask.any():
                 df.loc[snpe_mask, "num_simulations"] *= n_l
                 log.info(f"  Scaled SNPE num_simulations by {n_l}")
+
+            if deepset_mask.any():
+                deepset_scale = (n_l + 1) // 2
+                df.loc[deepset_mask, "num_simulations"] *= deepset_scale
+                log.info(f"  Scaled DeepSet num_simulations by {deepset_scale}")
 
     return results
 
