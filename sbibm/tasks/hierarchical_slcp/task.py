@@ -143,7 +143,7 @@ class HierarchicalSLCP(Task):
 
         # Define hierarchical prior distribution
         # Global parameters: [s1, s2, rho]
-        # s1, s2 ~ Uniform(0.5, 3.0), rho ~ Uniform(-3, 3)
+        # s1, s2 ~ Uniform(-3.0, 3.0), rho ~ Uniform(-3, 3)
         s_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([2]).to_event(1)
         rho_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([1]).to_event(1)
         global_dist = BlockwiseDistribution([s_dist, rho_dist])
