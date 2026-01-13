@@ -21,20 +21,95 @@ class HierarchicalSLCP(Task):
     def __init__(self, n_l: int = 5):
         """Hierarchical SLCP
 
-        Hierarchical extension of the SLCP task where each observation
-        consists of n_l local contexts. Uses Strategy 1 (natural
-        global/local split): covariance structure is global (shared),
-        while means are local (context-specific).
+        Hierarchical extension of the SLCP (Simple Likelihood Complex Posterior)
+        task where each observation consists of n_l local contexts. Uses Strategy 1
+        (natural global/local split): covariance structure is global (shared across
+        contexts), while means are local (context-specific).
 
-        Global parameters (3 total):
-            - s1, s2: Standard deviations (Uniform(0.5, 3.0))
-            - rho: Correlation (Uniform(-3, 3))
+        SLCP demonstrates the challenge of inference when the likelihood is simple
+        but the posterior has complex geometry.
 
-        Local parameters (2 * n_l total):
-            - For each context i: m0_i, m1_i ~ Uniform(-3, 3)
+        Parameters
+        ----------
+        The model has (3 + 2*n_l) parameters split into:
 
-        Args:
-            n_l: Number of local contexts (default: 5)
+        **Global parameters** (dim=3):
+            s1, s2 : scalars, s1, s2 ∈ [-3, 3]
+                Scale parameters that determine the covariance structure
+                Prior: s1, s2 ~ U(-3, 3)
+            ρ : scalar, ρ ∈ [-3, 3]
+                Correlation parameter (transformed via tanh to [-1, 1])
+                Prior: ρ ~ U(-3, 3)
+
+        **Local parameters** (dim=2*n_l):
+            m0_i, m1_i : scalars, m0_i, m1_i ∈ [-3, 3] (for each context i=1,...,n_l)
+                Context-specific mean parameters (2D mean vector per context)
+                Prior: m0_i, m1_i ~ U(-3, 3) independently for each context
+
+        Parameter Layout
+        ----------------
+        Parameters are concatenated as: θ = [s1, s2, ρ, m0_1, m1_1, m0_2, m1_2, ..., m0_{n_l}, m1_{n_l}]
+
+        For n_l contexts:
+        - θ[0:3]: Global parameters [s1, s2, ρ]
+        - θ[3:5]: Local means [m0_1, m1_1] for context 1
+        - θ[5:7]: Local means [m0_2, m1_2] for context 2
+        - ...
+        - θ[3+2*(n_l-1):3+2*n_l]: Local means [m0_{n_l}, m1_{n_l}] for context n_l
+
+        Simulator
+        ---------
+        For each local context i, the model generates num_data=4 observations according to:
+
+            x_{i,j} ~ MVN([m0_i, m1_i], Σ)    for j=1,...,4
+
+        Where the covariance matrix Σ is constructed from global parameters:
+
+            Σ = [[s1⁴,           tanh(ρ)·s1²·s2²],
+                 [tanh(ρ)·s1²·s2², s2⁴           ]]
+
+        Where:
+        - x_{i,j} ∈ ℝ² are 2D observations (j-th observation from context i)
+        - [m0_i, m1_i] ∈ [-3, 3]² is the context-specific 2D mean vector
+        - s1, s2 are squared twice (s1⁴, s2⁴) to form variances
+        - ρ is transformed via tanh(ρ) to obtain correlation ∈ [-1, 1]
+        - Small ε = 10⁻⁶ added to diagonal for numerical stability
+
+        Each context generates 4 independent 2D observations from the same MVN,
+        resulting in 8 data dimensions per context (4 observations × 2 dimensions).
+
+        Likelihood
+        ----------
+        The likelihood factorizes across independent contexts:
+
+            p(x | θ) = ∏_{i=1}^{n_l} ∏_{j=1}^{4} MVN(x_{i,j} | [m0_i, m1_i], Σ)
+
+        Where x represents all observations from all contexts, and each context's
+        observations are independent given the parameters.
+
+        Args
+        ----
+        n_l : int, default=5
+            Number of local contexts
+
+        Notes
+        -----
+        This model demonstrates Strategy 1 hierarchical modeling where covariance
+        structure is pooled globally (shared across contexts) while location parameters
+        vary locally. The global covariance Σ is constructed from transformed scale
+        parameters to ensure positive definiteness.
+
+        Key transformations:
+        - s1, s2 are raised to the 4th power (s⁴) for variance terms
+        - ρ undergoes tanh transformation to constrain correlation to [-1, 1]
+        - Small ε added to diagonal ensures numerical stability
+
+        SLCP stands for "Simple Likelihood Complex Posterior" - the Gaussian likelihood
+        is simple, but the posterior geometry can be complex due to parameter interactions.
+
+        See Also
+        --------
+        slcp : The non-hierarchical version
         """
         self.n_l = n_l
         self.num_data = 4  # 4 observations per context (as in original SLCP)

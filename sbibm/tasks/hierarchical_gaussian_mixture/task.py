@@ -29,29 +29,102 @@ class HierarchicalGaussianMixture(Task):
         Hierarchical extension of the Gaussian Mixture task where each
         observation consists of n_l local contexts. Uses Strategy 2 (full
         local with pooling): all original parameters become local, with
-        global pooling parameters controlling their distribution.
+        global hyperparameters controlling their hierarchical distribution.
 
-        Global parameters (2*dim total):
-            - global_loc (dim params): Location parameters for each dimension
-              (Uniform(-prior_bound, prior_bound))
-            - global_scale (dim params): Scale parameters for each dimension
-              (HalfNormal(1.0))
+        The simulator uses a two-component Gaussian mixture model where local
+        parameters determine the mixture component means.
 
-        Local parameters (dim * n_l total):
-            - For each context i: theta_i ~ TruncatedNormal(global_loc,
-              global_scale, low=-prior_bound, high=+prior_bound)
-            - Bounds follow Bayesian regression convention where local
-              parameters are constrained to reasonable support region.
+        Parameters
+        ----------
+        The model has (2*dim + dim*n_l) parameters split into:
 
-        The simulator uses a mixture of Gaussians with two components for
-        each local context independently.
+        **Global parameters** (dim=2*dim):
+            μ_global : vector of length dim, μ_global ∈ [-prior_bound, prior_bound]
+                Global location hyperparameters (one per dimension)
+                Prior: μ_global ~ U(-prior_bound, prior_bound)
+            σ_global : vector of length dim, σ_global > 0
+                Global scale hyperparameters (one per dimension)
+                Prior: σ_global ~ HalfNormal(1.0)
 
-        Args:
-            n_l: Number of local contexts (default: 5)
-            dim: Dimensionality of parameters and data per context
-                (default: 1)
-            prior_bound: Prior bound for location parameters
-                (default: 10.0)
+        **Local parameters** (dim=dim*n_l):
+            θ_i : vector of length dim, θ_i ∈ [-prior_bound, prior_bound] (for each context i=1,...,n_l)
+                Context-specific parameters that determine mixture locations
+                Prior: θ_i ~ TN(μ_global, σ_global, -prior_bound, prior_bound) | μ_global, σ_global
+
+        Parameter Layout
+        ----------------
+        Parameters are concatenated as: θ = [μ_global, σ_global, θ_1, θ_2, ..., θ_{n_l}]
+
+        For dim=1 and n_l contexts:
+        - θ[0:1]: Global location μ_global
+        - θ[1:2]: Global scale σ_global
+        - θ[2]: Local parameter θ_1 for context 1
+        - θ[3]: Local parameter θ_2 for context 2
+        - ...
+        - θ[2+n_l-1]: Local parameter θ_{n_l} for context n_l
+
+        For general dim and n_l contexts:
+        - θ[0:dim]: Global locations μ_global
+        - θ[dim:2*dim]: Global scales σ_global
+        - θ[2*dim:2*dim+dim]: Local parameters θ_1 for context 1
+        - θ[2*dim+dim:2*dim+2*dim]: Local parameters θ_2 for context 2
+        - ...
+        - θ[2*dim+(n_l-1)*dim:2*dim+n_l*dim]: Local parameters θ_{n_l} for context n_l
+
+        Simulator
+        ---------
+        For each local context i, the model generates observations from a two-component
+        Gaussian mixture:
+
+            k ~ Categorical([0.5, 0.5])
+            x_i ~ N(factor[k] · θ_i, scale[k] · I_dim)
+
+        Where:
+        - k ∈ {0, 1} is the mixture component indicator
+        - factor = [1.0, 1.0] (both components use θ_i directly as mean)
+        - scale = [1.0, 0.1] (high-variance and low-variance components)
+        - x_i ∈ ℝ^dim is the observation from context i
+
+        Equivalently, the marginal observation distribution is:
+
+            x_i ~ 0.5 · N(θ_i, 1.0 · I_dim) + 0.5 · N(θ_i, 0.01 · I_dim)
+
+        Likelihood
+        ----------
+        The likelihood factorizes across independent contexts and marginalizes
+        over mixture components:
+
+            p(x | θ) = ∏_{i=1}^{n_l} [0.5 · N(x_i | θ_i, 1.0 · I) + 0.5 · N(x_i | θ_i, 0.01 · I)]
+
+        Where x = [x_1, ..., x_{n_l}] represents observations from all contexts.
+
+        Args
+        ----
+        n_l : int, default=5
+            Number of local contexts
+        dim : int, default=1
+            Dimensionality of parameters and data per context
+        prior_bound : float, default=10.0
+            Bound for location parameters (support is [-prior_bound, prior_bound])
+
+        Notes
+        -----
+        This model demonstrates Strategy 2 hierarchical modeling where the original
+        task parameters become local (context-specific), and new global hyperparameters
+        pool information across contexts via a hierarchical prior structure.
+
+        The local parameters θ_i are drawn from a truncated normal distribution
+        centered at global location μ_global with global scale σ_global, creating
+        partial pooling across contexts. The truncation bounds ensure parameters
+        remain in a reasonable support region.
+
+        The two-component mixture with vastly different scales (1.0 vs 0.1) creates
+        a challenging bimodal likelihood structure, making this task particularly
+        difficult for inference methods.
+
+        See Also
+        --------
+        gaussian_mixture : The non-hierarchical version
         """
         self.n_l = n_l
         self.dim = dim

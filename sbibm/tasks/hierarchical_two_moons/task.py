@@ -28,20 +28,102 @@ class HierarchicalTwoMoons(Task):
 
         Hierarchical extension of the Two Moons task where each observation
         consists of n_l local contexts. Uses Strategy 2 (full local with
-        pooling): all original parameters become local, with global pooling
-        parameters controlling their distribution.
+        pooling): all original parameters become local, with global
+        hyperparameters controlling their hierarchical distribution.
 
-        Global parameters (4 total):
-            - global_loc_0, global_loc_1: Location parameters for the two
-              dimensions (Uniform(-1, 1))
-            - global_scale_0, global_scale_1: Scale parameters (HalfNormal(0.5))
+        The Two Moons task features a characteristic crescent-shaped geometry
+        where observations lie on two curved "moons" in 2D space.
 
-        Local parameters (2 * n_l total):
-            - For each context i: theta_i ~ Normal(global_loc, global_scale)
+        Parameters
+        ----------
+        The model has (4 + 2*n_l) parameters split into:
 
-        Args:
-            n_l: Number of local contexts (default: 5)
-            invalid_log_prob: Log probability for invalid parameters
+        **Global parameters** (dim=4):
+            μ_global : 2D vector, μ_global ∈ [-1, 1]²
+                Global location hyperparameters (one per dimension)
+                Prior: μ_global[0], μ_global[1] ~ U(-1, 1)
+            σ_global : 2D vector, σ_global ∈ [0.1, 3.0]²
+                Global scale hyperparameters (one per dimension)
+                Prior: σ_global[0], σ_global[1] ~ U(0.1, 3.0)
+                Note: Squared to σ_global² ∈ [0.01, 9.0]² before use in local distribution
+
+        **Local parameters** (dim=2*n_l):
+            θ_i : 2D vector, θ_i ∈ [-1, 1]² (for each context i=1,...,n_l)
+                Context-specific parameters determining position in two-moons space
+                Prior: θ_i ~ TN(μ_global, σ_global², -1, 1) | μ_global, σ_global
+
+        Parameter Layout
+        ----------------
+        Parameters are concatenated as: θ = [μ_global[0], μ_global[1], σ_global[0], σ_global[1], θ_1[0], θ_1[1], ..., θ_{n_l}[0], θ_{n_l}[1]]
+
+        For n_l contexts:
+        - θ[0:2]: Global locations [μ_global[0], μ_global[1]]
+        - θ[2:4]: Global scales [σ_global[0], σ_global[1]]
+        - θ[4:6]: Local parameters θ_1 = [θ_1[0], θ_1[1]] for context 1
+        - θ[6:8]: Local parameters θ_2 = [θ_2[0], θ_2[1]] for context 2
+        - ...
+        - θ[4+2*(n_l-1):4+2*n_l]: Local parameters θ_{n_l} for context n_l
+
+        Simulator
+        ---------
+        For each local context i, the model generates 2D observations by applying
+        the Two Moons transformation:
+
+            a ~ U(-π/2, π/2)
+            r ~ N(0.1, 0.01²)
+            p = [r·cos(a) + 0.25, r·sin(a)]
+            x_i = TwoMoons_map(θ_i, p)
+
+        The Two Moons mapping function applies:
+            1. Rotation by -π/4: z = R_{-π/4} @ θ_i
+            2. Translation with reflection: x_i = p + [-|z[0]|, z[1]]
+
+        Where:
+        - a, r determine the position along the moon curve
+        - p is the base point on the moon arc
+        - θ_i ∈ [-1, 1]² determines the specific moon geometry
+        - x_i ∈ ℝ² is the 2D observation from context i
+
+        This non-linear transformation creates the characteristic crescent shape,
+        making the likelihood geometry complex.
+
+        Likelihood
+        ----------
+        The likelihood factorizes across independent contexts:
+
+            p(x | θ) = ∏_{i=1}^{n_l} p(x_i | θ_i)
+
+        Where the per-context likelihood p(x_i | θ_i) is computed via the inverse
+        Two Moons transformation. Parameters outside the valid region (where the
+        inverse transformation fails) are assigned log-likelihood = log(invalid_log_prob).
+
+        Args
+        ----
+        n_l : int, default=5
+            Number of local contexts
+        invalid_log_prob : float, default=1e-10
+            Probability assigned to parameters that produce invalid transformations
+
+        Notes
+        -----
+        This model demonstrates Strategy 2 hierarchical modeling with a complex
+        non-linear observation model. The global hyperparameters pool information
+        across contexts while local parameters vary to capture context-specific
+        moon geometries.
+
+        **Critical implementation detail**: The global scale parameters σ_global are
+        sampled from U(0.1, 3.0) but are **squared** (line 97 of implementation)
+        before being used as the scale parameter in the TruncatedNormal distribution
+        for local parameters. This means the effective variance support is [0.01, 9.0].
+
+        The Two Moons geometry creates a challenging inference problem due to:
+        - Non-linear transformations between parameter and observation space
+        - Invalid parameter regions where the inverse transformation fails
+        - Complex posterior geometry with potential multimodality
+
+        See Also
+        --------
+        two_moons : The non-hierarchical version
         """
         self.n_l = n_l
         self.invalid_log_prob = invalid_log_prob

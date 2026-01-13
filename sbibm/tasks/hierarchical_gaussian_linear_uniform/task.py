@@ -30,19 +30,94 @@ class HierarchicalGaussianLinearUniform(Task):
         each observation consists of n_l local contexts. Uses Strategy 1
         (natural global/local split): global parameters represent the shared
         noise scale, while local parameters represent context-specific means
-        bounded by a uniform prior.
+        with bounded uniform priors.
+
         This follows standard Bayesian regression where variance/scale is
         pooled globally and means/intercepts are estimated locally per group
         with bounded support.
 
+        Parameters
+        ----------
+        The model has (1 + n_l * dim_local_per_context) parameters split into:
 
-        Args:
-            n_l: Number of local contexts (default: 5)
-            dim_local_per_context: Number of observations per local context (default: 1)
-            prior_bound: Bound for uniform prior on local means
-                (default: 10.0)
-            simulator_scale: Scale parameter for HalfNormal prior on global
-                noise scale (default: 0.1)
+        **Global parameters** (dim=1):
+            σ : scalar, σ > 0
+                Shared noise scale across all contexts
+                Prior: σ ~ HalfNormal(simulator_scale)
+
+        **Local parameters** (dim=n_l * dim_local_per_context):
+            μ_i : vector of length dim_local_per_context, μ_i ∈ [-prior_bound, prior_bound] (for each context i=1,...,n_l)
+                Context-specific mean parameters with bounded support
+                Prior: μ_i ~ U(-prior_bound, prior_bound) independently for each context
+
+        Parameter Layout
+        ----------------
+        Parameters are concatenated as: θ = [σ, μ_1, μ_2, ..., μ_{n_l}]
+
+        For default dim_local_per_context=1 and n_l contexts:
+        - θ[0]: Global noise scale σ
+        - θ[1]: Local mean μ_1 for context 1
+        - θ[2]: Local mean μ_2 for context 2
+        - ...
+        - θ[n_l]: Local mean μ_{n_l} for context n_l
+
+        For dim_local_per_context > 1:
+        - θ[0]: Global noise scale σ
+        - θ[1:1+dim_local_per_context]: Local means μ_1 for context 1
+        - θ[1+dim_local_per_context:1+2*dim_local_per_context]: Local means μ_2 for context 2
+        - ...
+
+        Simulator
+        ---------
+        For each local context i, the model generates observations according to:
+
+            x_i ~ N(μ_i, σ² I_{dim_local_per_context})
+
+        Where:
+        - x_i ∈ ℝ^{dim_local_per_context} are observations from context i
+        - μ_i ∈ [-prior_bound, prior_bound]^{dim_local_per_context} is the context-specific mean vector
+        - σ > 0 is the shared noise scale (global parameter)
+        - I_{dim_local_per_context} is the identity matrix of size dim_local_per_context
+
+        The simulator loops over n_l contexts, generating independent observations
+        from Gaussian distributions with context-specific means and shared noise scale.
+
+        Likelihood
+        ----------
+        The likelihood factorizes across independent contexts:
+
+            p(x | θ) = ∏_{i=1}^{n_l} N(x_i | μ_i, σ² I)
+
+        Where x = [x_1, ..., x_{n_l}] represents observations from all contexts, and
+        each context's observations are independent given the parameters.
+
+        Args
+        ----
+        n_l : int, default=5
+            Number of local contexts
+        prior_bound : float, default=10.0
+            Bound for uniform prior on local means (support is [-prior_bound, prior_bound])
+        simulator_scale : float, default=1.0
+            Scale parameter for HalfNormal prior on global noise scale
+        dim_local_per_context : int, default=1
+            Number of observations per local context
+        device : str, default='cpu'
+            Device for tensor computations
+
+        Notes
+        -----
+        This model demonstrates Strategy 1 hierarchical modeling with bounded local
+        parameters. The key difference from hierarchical_gaussian_linear is the use
+        of uniform priors with bounded support for local means, which can be useful
+        when domain knowledge suggests parameter bounds.
+
+        The global noise scale σ is shared across all contexts, implementing partial
+        pooling that borrows strength across groups while allowing context-specific
+        means within the bounded region.
+
+        See Also
+        --------
+        hierarchical_gaussian_linear : Variant with unbounded Normal prior on local means
         """
         self.n_l = n_l
         self.prior_bound = torch.tensor(prior_bound, device=device)
