@@ -3,6 +3,7 @@
 # Default values
 DEVICE="cpu"
 N_L=5
+NUM_OBSERVATIONS=10
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -13,6 +14,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --n_l)
       N_L="$2"
+      shift 2
+      ;;
+    --num_observations)
+      NUM_OBSERVATIONS="$2"
       shift 2
       ;;
     *)
@@ -37,6 +42,7 @@ ALGORITHMS=("bottom_up" "snpe" "deepset")
 
 echo "Device: $DEVICE"
 echo "n_l (local contexts): $N_L"
+echo "num_observations: $NUM_OBSERVATIONS"
 echo ""
 
 # Regenerate observations if n_l != 5
@@ -58,50 +64,41 @@ echo "Running benchmarks with device: $DEVICE"
 
 for ALGORITHM in "${ALGORITHMS[@]}"; do
   for TASK in "${TASKS[@]}"; do
-    echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM"
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "$ALGORITHM" \
-      --num_simulations 1000 \
-      --num_observation 1 \
-      --output_dir test_results \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000
+    for OBS in $(seq 1 $NUM_OBSERVATIONS); do
+      echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM, observation: $OBS"
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "$ALGORITHM" \
+        --num_simulations 1000 \
+        --num_observation "$OBS" \
+        --output_dir test_results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
 
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "$ALGORITHM" \
-      --num_simulations 5000 \
-      --num_observation 1 \
-      --output_dir test_results \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "$ALGORITHM" \
+        --num_simulations 5000 \
+        --num_observation "$OBS" \
+        --output_dir test_results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
 
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "$ALGORITHM" \
-      --num_simulations 10000 \
-      --num_observation 1 \
-      --output_dir test_results \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000
-
-    echo "Generating visualization for task: $TASK"
-    python scripts/visualize_hierarchical_posterior.py \
-      --task "$TASK" \
-      --algorithm "$ALGORITHM" \
-      --n_l "$N_L" \
-      --num_simulations 10000 \
-      --num_observation 1 \
-      --num_samples 1000 \
-      --seed 42 \
-      --output_path "test_results/${TASK}_${ALGORITHM}_posterior.png"
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "$ALGORITHM" \
+        --num_simulations 10000 \
+        --num_observation "$OBS" \
+        --output_dir test_results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
+    done
   done
 done
 
