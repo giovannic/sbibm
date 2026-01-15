@@ -48,8 +48,8 @@ TASKS=(
   "hierarchical_two_moons"
 )
 
-echo "Prior Predictive Checks"
-echo "======================="
+echo "Prior Checks (Parameters + Observations)"
+echo "========================================"
 echo "n_l (local contexts): $N_L"
 echo "num_samples: $NUM_SAMPLES"
 echo "max_local_contexts: $MAX_LOCAL_CONTEXTS"
@@ -70,7 +70,7 @@ echo "Observation regeneration completed!"
 echo ""
 
 for TASK in "${TASKS[@]}"; do
-  echo "Running prior predictive check for task: $TASK"
+  echo "Running prior check (parameters) for task: $TASK"
   python scripts/visualize_hierarchical_prior.py \
     --task "$TASK" \
     --n_l "$N_L" \
@@ -81,11 +81,35 @@ for TASK in "${TASKS[@]}"; do
     --seed "$SEED"
 
   if [[ $? -ne 0 ]]; then
+    echo "Error running prior check for $TASK"
+    exit 1
+  fi
+  echo ""
+done
+
+echo "Prior checks (parameters) completed!"
+echo ""
+
+# Run prior predictive checks (observations)
+for TASK in "${TASKS[@]}"; do
+  echo "Running prior predictive check (observations) for task: $TASK"
+  python scripts/visualize_hierarchical_prior_predictive.py \
+    --task "$TASK" \
+    --n_l "$N_L" \
+    --num_samples "$NUM_SAMPLES" \
+    --num_observation 1 \
+    --max_local_contexts "$MAX_LOCAL_CONTEXTS" \
+    --output_path "${OUTPUT_DIR}/${TASK}_prior_predictive.png" \
+    --seed "$SEED"
+
+  if [[ $? -ne 0 ]]; then
     echo "Error running prior predictive check for $TASK"
     exit 1
   fi
   echo ""
 done
 
-echo "All prior predictive checks completed!"
+echo "All prior checks completed!"
 echo "Results saved to: $OUTPUT_DIR"
+echo "  - *_prior.png: Prior distribution of parameters"
+echo "  - *_prior_predictive.png: Prior predictive distribution of observations"
