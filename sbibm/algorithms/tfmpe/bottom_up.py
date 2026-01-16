@@ -2,12 +2,12 @@
 
 import time
 from math import prod
-from typing import Dict, List, Tuple
-from jaxtyping import Array
+from typing import List, Tuple
 
 import diffrax
 import jax
 import jax.numpy as jnp
+from jax import tree
 import numpy as np
 import optax
 import torch
@@ -43,7 +43,7 @@ class TFMPEPosterior:
         params_f_in,
         context_f_in,
         transforms=None,
-        context_tokens=None,
+        context=None,
     ):
         """Initialize TFMPE posterior wrapper.
 
@@ -58,7 +58,7 @@ class TFMPEPosterior:
             n_local: Number of local groups
             transforms: Transform object for handling constrained
                 parameters
-            context_tokens: Context tokens (observations) for
+            context: Dict dictionary of (observations) for
                 computing log prob
         """
         self.tfmpe_model = tfmpe_model
@@ -69,7 +69,7 @@ class TFMPEPosterior:
         self.local_names = local_names
         self.n_local = n_local
         self.transforms = transforms
-        self.context_tokens = context_tokens
+        self.context = context
         self.params_f_in = params_f_in
         self.context_f_in = context_f_in
 
@@ -106,36 +106,46 @@ class TFMPEPosterior:
             for key, value in param_dict_template.items()
         }
 
-        param_tokens = Tokens.from_pytree(
-            param_dict_samples,
-            sample_ndims=1,
-            labeller=self.labeller,
-            independence=self.independence,
-            functional_inputs=self.params_f_in
-        )
-
         # Sample from posterior
         # TODO: Handle RNG seeding properly
         if x is not None:
             torch_context = x.reshape(x.shape[0], self.n_local, -1, 1)
             context = { "y":  jnp.asarray(torch_context) }
-            context_tokens = Tokens.from_pytree(
-                context,
-                sample_ndims=1,
-                labeller=self.labeller,
-                independence=self.independence,
-                functional_inputs=self.context_f_in
-            )
         else:
-            context_tokens = self.context_tokens
+            context = self.context
+            context = tree.map(
+                lambda leaf: jnp.broadcast_to(
+                    leaf,
+                    (num_samples,) + leaf.shape[1:]
+                ),
+                context
+            )
+            
+        if self.context_f_in is not None:
+            f_in = {**self.params_f_in, **self.context_f_in}
+        else:
+            f_in = None
+
+        tokens, decoder = Tokens.from_pytree(
+            {**param_dict_samples, **context},
+            condition=list(context.keys()),
+            sample_ndims=1,
+            labeller=self.labeller,
+            independence=self.independence,
+            functional_inputs=f_in,
+            return_decoder=True
+        )
             
         posterior_tokens = self.tfmpe_model.sample_posterior(
-            context=context_tokens,
-            params=param_tokens,
+            tokens=tokens
         )
 
         # Convert tokens back to flat tensor format
-        posterior_dict = posterior_tokens.decode()
+        posterior_dict = decoder(posterior_tokens)
+        posterior_dict = {
+            k: v for k, v in posterior_dict.items()
+            if k in param_dict_samples.keys()
+        }
         params_list = []
         for name, (start, end) in self.slices:
             # Extract component from dict and reshape correctly
@@ -487,34 +497,35 @@ def run(
     sample_params, params_f_in = prior_fn(
         key, n=n_local, n_samples=10
     )
+    sample_obs, obs_f_in = simulator_fn(
+        key, sample_params, n_local
+    )
 
     # Create labeller and independence structure
     labeller = Labeller.for_keys(all_param_names)
 
     # Define independence: each local param[i] attends
     # only to y[i]
-    independence = Independence(
-        cross_local = [
-            (name, "y", (0, 0)) for name in local_names
-        ] + [
-            ("y", name, (0, 0)) for name in local_names
-        ]
-    )
+    independence = Independence()
 
     # Create tokens from sample data
-    params_tokens = Tokens.from_pytree(
-        sample_params,
+    if params_f_in is not None:
+        f_in = {**params_f_in, **obs_f_in}
+    else:
+        f_in = None
+    tokens = Tokens.from_pytree(
+        {**sample_params, **sample_obs},
+        condition=list(sample_obs.keys()),
         sample_ndims=1,
         labeller=labeller,
         independence=independence,
-        functional_inputs=params_f_in
+        functional_inputs=f_in
     )
 
     # Initialize TFMPE model
     config = TransformerConfig(
         latent_dim=64,
         n_encoder=1,
-        n_decoder=1,
         n_heads=2,
         n_ff=2,
     )
@@ -525,7 +536,7 @@ def run(
     )
     transformer = Transformer(
         config=config,
-        tokens=params_tokens,
+        tokens=tokens,
         rngs=rngs,
     )
 
@@ -571,12 +582,7 @@ def run(
     # Generate posterior samples using trained TFMPE
     # Create context tokens from observation
     y_f_in = None # TODO: this must be set for models with functional observations
-    context_tokens = Tokens.from_pytree(
-        y_obs_dict,
-        sample_ndims=1,
-        labeller=labeller,
-        functional_inputs=y_f_in
-    )
+    
 
     # Create parameter tokens template for sampling
     param_dict_template, param_f_in = prior_fn(rng, n=n_local, n_samples=1)
@@ -585,27 +591,51 @@ def run(
         for key, value in param_dict_template.items()
     }
 
-    param_tokens = Tokens.from_pytree(
-        param_dict_samples,
+    y_obs_sample = tree.map(
+        lambda leaf: jnp.broadcast_to(
+            leaf,
+            (num_samples,) + leaf.shape[1:])
+        ,
+        y_obs_dict
+    )
+
+    sample_param_f_in = jax.tree.map(
+        lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
+        param_f_in
+    )
+
+    sample_y_f_in = jax.tree.map(
+        lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
+        y_f_in
+    )
+
+    if sample_y_f_in is not None:
+        f_in = {**sample_y_f_in, **sample_param_f_in}
+    else:
+        f_in = None
+
+    tokens, decoder = Tokens.from_pytree(
+        {
+            **y_obs_sample,
+            **param_dict_samples
+        },
+        condition=list(y_obs_dict.keys()),
         sample_ndims=1,
         labeller=labeller,
-        independence=independence,
-        functional_inputs=jax.tree.map(
-            lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
-            param_f_in
-        )
+        functional_inputs=f_in,
+        return_decoder=True
     )
 
     # Sample from posterior
     rng_key = jax.random.PRNGKey(42)
     nnx.reseed(trained_tfmpe, params=rng_key)
     posterior_tokens = trained_tfmpe.sample_posterior(
-        context=context_tokens,
-        params=param_tokens,
+        tokens=tokens,
     )
 
     # Convert tokens back to flat tensor format
-    posterior_dict = posterior_tokens.decode()
+    posterior_dict = decoder(posterior_tokens)
+        
     params_list = []
     for name in global_names + local_names:
         params_list.append(posterior_dict[name].reshape(num_samples, -1))
@@ -628,7 +658,7 @@ def run(
         local_names=local_names,
         n_local=n_local,
         transforms=transforms if automatic_transforms_enabled else None,
-        context_tokens=context_tokens,
+        context=y_obs_dict,
         params_f_in=jax.tree.map(
             lambda leaf: jnp.broadcast_to(leaf[0:1], (num_samples,) + leaf.shape[1:]),
             params_f_in
