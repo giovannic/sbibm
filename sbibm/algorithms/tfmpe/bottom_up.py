@@ -558,6 +558,35 @@ def run(
     n_iter_per_round = 1000
     batch_size = 100
 
+    # Get transforms
+    transforms = task._get_transforms(n_l=n_local)["parameters"]
+
+    # probability transformation for truncated proposals
+    if automatic_transforms_enabled:
+        def prob_transform(params_dict: dict, log_prob: float) -> jnp.ndarray:
+            params_list = []
+            for name, (start, end) in slices:
+                # Extract component from dict and reshape correctly
+                # The slice (start, end) tells us how many dimensions this
+                # component should have in the flat representation
+                component = params_dict[name]
+                # Reshape to (num_samples, -1) to flatten all dimensions
+                # except the first (sample) dimension
+                component_flat = component.reshape(component.shape[0], -1)
+                params_list.append(component_flat)
+
+            flattened = jnp.concatenate(params_list, axis=1)
+            flattened = torch.from_numpy(np.array(flattened)).float()
+            unconstrained = transforms.inv(flattened)
+            delta = transforms.log_abs_det_jacobian(
+                flattened,
+                unconstrained
+            )
+            return log_prob + jnp.array(delta)
+    else:
+        prob_transform = None
+
+
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
     trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
@@ -568,7 +597,7 @@ def run(
         local_fn=local_fn,
         global_names=global_names,
         n_groups=n_local,
-        n_rounds=1,
+        n_rounds=2,
         n_samples_per_round=n_samples_per_round,
         n_val_samples=n_val_samples,
         opt=opt,
@@ -577,6 +606,7 @@ def run(
         rng=rng,
         independence=independence,
         labeller=labeller,
+        prob_transform=prob_transform
     )
 
     # Generate posterior samples using trained TFMPE
@@ -643,8 +673,6 @@ def run(
     posterior_flat = jnp.concatenate(params_list, axis=1)
     posterior_samples = torch.from_numpy(np.array(posterior_flat)).float()
 
-    # Get transforms
-    transforms = task._get_transforms(n_l=n_local)["parameters"]
     if automatic_transforms_enabled:
         posterior_samples = transforms.inv(posterior_samples)
 
