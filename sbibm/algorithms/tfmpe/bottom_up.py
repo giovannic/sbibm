@@ -553,7 +553,8 @@ def run(
     opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
 
     # Training parameters
-    n_samples_per_round = num_simulations
+    n_rounds = 5
+    n_samples_per_round = num_simulations // n_rounds
     n_val_samples = min(1000, num_simulations // 10)
     n_iter_per_round = 1000
     batch_size = 100
@@ -576,20 +577,80 @@ def run(
                 params_list.append(component_flat)
 
             flattened = jnp.concatenate(params_list, axis=1)
-            flattened = torch.from_numpy(np.array(flattened)).float()
-            unconstrained = transforms.inv(flattened)
+            unconstrained = torch.from_numpy(np.array(flattened)).float()
+            constrained = transforms(unconstrained)
             delta = transforms.log_abs_det_jacobian(
-                flattened,
+                constrained,
                 unconstrained
             )
             return log_prob + jnp.array(delta)
+
+        def forward(params_dict: dict) -> dict:
+            params_list = []
+            for name, (start, end) in slices:
+                # Extract component from dict and reshape correctly
+                # The slice (start, end) tells us how many dimensions this
+                # component should have in the flat representation
+                component = params_dict[name]
+                # Reshape to (num_samples, -1) to flatten all dimensions
+                # except the first (sample) dimension
+                component_flat = component.reshape(component.shape[0], -1)
+                params_list.append(component_flat)
+
+            flattened = jnp.concatenate(params_list, axis=1)
+            unconstrained = torch.from_numpy(np.array(flattened)).float()
+            constrained = transforms(unconstrained)
+
+            # Convert to JAX arrays
+            samples_jax = jnp.asarray(constrained)
+
+            # Create structured dict for TFMPE
+            new_param_dict = {}
+
+            # Add global parameters, grouped by component
+            for name, (start, end) in slices:
+                # Extract this component's parameters
+                component_params = samples_jax[:, start:end]
+                # Add batch dimension for TFMPE format
+                if str.startswith(name, "p_l_"):
+                    component_params = component_params.reshape(
+                        component_params.shape[0],
+                        n_local,
+                        -1
+                    )
+                new_param_dict[name] = component_params[..., None]
+
+            return new_param_dict
     else:
         prob_transform = None
 
+    def prior_log_prob(params_dict: dict) -> jnp.ndarray:
+        params_list = []
+        for name, (start, end) in slices:
+            # Extract component from dict and reshape correctly
+            # The slice (start, end) tells us how many dimensions this
+            # component should have in the flat representation
+            component = params_dict[name]
+            # Reshape to (num_samples, -1) to flatten all dimensions
+            # except the first (sample) dimension
+            component_flat = component.reshape(component.shape[0], -1)
+            params_list.append(component_flat)
+
+        flattened = jnp.concatenate(params_list, axis=1)
+        unconstrained = torch.from_numpy(np.array(flattened)).float()
+
+        prior_dist = task.prior_dist.for_n_local(n_local)
+        if automatic_transforms_enabled:
+            transforms = task._get_transforms(n_l=n_local)["parameters"]
+            prior_dist = wrap_prior_dist(prior_dist, transforms)
+
+        log_prob = prior_dist.log_prob(unconstrained)
+
+        return jnp.asarray(log_prob)
 
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
-    trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
+    trained_tfmpe, all_losses, proposals = tfmpe_fit_bottom_up(
         tfmpe=tfmpe,
         y_obs=y_obs_dict,
         simulator_fn=simulator_fn,
@@ -597,7 +658,7 @@ def run(
         local_fn=local_fn,
         global_names=global_names,
         n_groups=n_local,
-        n_rounds=2,
+        n_rounds=n_rounds,
         n_samples_per_round=n_samples_per_round,
         n_val_samples=n_val_samples,
         opt=opt,
@@ -606,8 +667,35 @@ def run(
         rng=rng,
         independence=independence,
         labeller=labeller,
-        prob_transform=prob_transform
+        prob_transform=prob_transform,
+        prior_log_prob=prior_log_prob,
     )
+
+    # from ...visualisation.hierarchical import (
+        # plot_hierarchical_posterior,
+        # generate_hierarchical_labels
+    # )
+    # from pathlib import Path
+
+    # for i, params_dict in enumerate(proposals):
+        # params_list = [
+            # params_dict[name].reshape(params_dict[name].shape[0], -1)
+            # for name, _ in slices
+        # ]
+        # params_flat = jnp.concatenate(params_list, axis=1)
+
+        # # Convert to torch and call task simulator
+        # params_torch = torch.from_numpy(np.array(params_flat)).float()
+
+        # if automatic_transforms_enabled:
+            # l_transforms = task._get_transforms(n_l=1)["parameters"]
+            # params_torch = l_transforms.inv(params_torch)
+
+        # plot_hierarchical_posterior(
+            # params_torch,
+            # generate_hierarchical_labels(task, 1),
+            # Path(f'proposal_{i}.png'),
+        # )
 
     # Generate posterior samples using trained TFMPE
     # Create context tokens from observation
