@@ -45,7 +45,6 @@ class HierarchicalTwoMoons(Task):
             σ_global : 2D vector, σ_global ∈ [0.1, 3.0]²
                 Global scale hyperparameters (one per dimension)
                 Prior: σ_global[0], σ_global[1] ~ U(0.1, 3.0)
-                Note: Squared to σ_global² ∈ [0.01, 9.0]² before use in local distribution
 
         **Local parameters** (dim=2*n_l):
             θ_i : 2D vector, θ_i ∈ [-1, 1]² (for each context i=1,...,n_l)
@@ -111,11 +110,6 @@ class HierarchicalTwoMoons(Task):
         across contexts while local parameters vary to capture context-specific
         moon geometries.
 
-        **Critical implementation detail**: The global scale parameters σ_global are
-        sampled from U(0.1, 3.0) but are **squared** (line 97 of implementation)
-        before being used as the scale parameter in the TruncatedNormal distribution
-        for local parameters. This means the effective variance support is [0.01, 9.0].
-
         The Two Moons geometry creates a challenging inference problem due to:
         - Non-linear transformations between parameter and observation space
         - Invalid parameter regions where the inverse transformation fails
@@ -176,7 +170,7 @@ class HierarchicalTwoMoons(Task):
             # n_local: number of local groups/contexts
             # Extract locs and scales
             locs = global_params[..., :2]  # [..., 2]
-            scales = global_params[..., 2:4]  ** 2 # [..., 2]
+            scales = global_params[..., 2:4]  # [..., 2]
 
             # Create distribution for n_local groups
             # Each local context (2D) is TruncatedNormal(loc,
