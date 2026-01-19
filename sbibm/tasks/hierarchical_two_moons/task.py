@@ -304,9 +304,9 @@ class HierarchicalTwoMoons(Task):
         for _ in range(2):
             transforms_list.append(biject_to(constraints.interval(-1.0, 1.0)))
 
-        # global_scale: Uniform[0.1, 1.0] <-> R
+        # global_scale: Uniform[0.1, 3.0] <-> R
         for _ in range(2):
-            transforms_list.append(biject_to(constraints.interval(0.1, 1.0)))
+            transforms_list.append(biject_to(constraints.interval(0.1, 3.0)))
 
         # local params: TruncatedNormal[-1, 1] <-> R
         for _ in range(2 * n_l):
