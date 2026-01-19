@@ -3,8 +3,8 @@
 Grid visualization script for hierarchical benchmark results.
 
 This script aggregates CSV results from parallel HPC jobs and creates
-publication-quality grid visualizations with tasks as rows and
-algorithms (methods) as columns.
+publication-quality grid visualizations with tasks as rows. All algorithms
+are overlaid on the same axes with a shared legend.
 
 Example usage:
     python scripts/plot_hierarchical_benchmark.py \
@@ -94,10 +94,10 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
 def create_grid_plot(
     results: dict,
     metric: str,
-    title: str = None,
+    title: str | None = None,
     config: str = "manuscript",
-) -> plt.Figure:
-    """Create a grid of line plots for all tasks and algorithms.
+):
+    """Create a grid of line plots for all tasks with algorithms overlaid.
 
     Args:
         results: Dict mapping task_name -> DataFrame with
@@ -112,11 +112,11 @@ def create_grid_plot(
     # Set style based on config
     if config == "manuscript":
         plt.rcParams["font.size"] = 9
-        cell_width = 3.5
+        cell_width = 5.0
         cell_height = 2.5
     else:  # streamlit
         plt.rcParams["font.size"] = 11
-        cell_width = 4.5
+        cell_width = 6.0
         cell_height = 3.0
 
     plt.style.use("seaborn-v0_8-whitegrid")
@@ -128,108 +128,93 @@ def create_grid_plot(
         all_algorithms.update(df["algorithm"].unique())
     algorithms = sorted(all_algorithms)
 
-    n_tasks = len(tasks)
-    n_algorithms = len(algorithms)
+    # Assign colors to algorithms in alphabetical order using tab10 palette
+    cmap = plt.colormaps["tab10"]
+    algo_colors = {algo: cmap(i) for i, algo in enumerate(algorithms)}
 
-    # Create figure and subplots
-    figsize = (
-        cell_width * n_algorithms,
-        cell_height * n_tasks,
-    )
+    n_tasks = len(tasks)
+
+    # Create figure with one column of subplots
+    figsize = (cell_width, cell_height * n_tasks)
     fig, axes = plt.subplots(
         n_tasks,
-        n_algorithms,
+        1,
         figsize=figsize,
         squeeze=False,
     )
 
-    # Plot each task x algorithm cell
+    # Plot each task with all algorithms overlaid
     for task_idx, task_name in enumerate(tasks):
+        ax = axes[task_idx, 0]
         df = results[task_name]
 
-        for algo_idx, algorithm in enumerate(algorithms):
-            ax = axes[task_idx, algo_idx]
-
-            # Filter data for this task and algorithm
+        for algorithm in algorithms:
+            # Filter data for this algorithm
             algo_df = df[df["algorithm"] == algorithm]
 
             if len(algo_df) == 0:
-                # Algorithm not present for this task
-                ax.text(
-                    0.5,
-                    0.5,
-                    "No data",
-                    ha="center",
-                    va="center",
-                    transform=ax.transAxes,
-                    fontsize=10,
-                    color="gray",
-                )
-                ax.set_xlim(0, 1)
-                ax.set_ylim(0, 1)
-                ax.set_xticks([])
-                ax.set_yticks([])
-            else:
-                # Group by num_simulations and compute stats
-                grouped = (
-                    algo_df.groupby("num_simulations")[metric]
-                    .agg(["mean", "std", "count"])
-                    .reset_index()
-                )
+                continue
 
-                # Compute 95% CI
-                grouped["ci"] = 1.96 * grouped["std"] / (grouped["count"] ** 0.5)
+            # Group by num_simulations and compute stats
+            grouped = (
+                algo_df.groupby("num_simulations")[metric]
+                .agg(["mean", "std", "count"])
+                .reset_index()
+            )
 
-                # Plot line with error bars
-                ax.errorbar(
-                    grouped["num_simulations"],
-                    grouped["mean"],
-                    yerr=grouped["ci"],
-                    marker="o",
-                    markersize=5,
-                    linewidth=2,
-                    capsize=3,
-                    label=algorithm,
-                )
+            # Compute 95% CI
+            grouped["ci"] = 1.96 * grouped["std"] / (grouped["count"] ** 0.5)
 
-                # Formatting
-                ax.set_xlabel("Number of Simulations", fontsize=9)
-                if algo_idx == 0:
-                    ax.set_ylabel(
-                        metric.replace("_", " ").title(),
-                        fontsize=9,
-                    )
-                ax.grid(True, alpha=0.3)
+            # Get color for this algorithm
+            color = algo_colors[algorithm]
 
-                # Set x-axis ticks to actual simulation values
-                x_ticks = sorted(df["num_simulations"].unique())
-                ax.set_xticks(x_ticks)
-                ax.tick_params(axis="x", rotation=45, labelsize=8)
-                ax.tick_params(axis="y", labelsize=8)
+            # Plot line with error bars
+            ax.errorbar(
+                grouped["num_simulations"],
+                grouped["mean"],
+                yerr=grouped["ci"],
+                marker="o",
+                color=color,
+                markersize=5,
+                linewidth=2,
+                capsize=3,
+                label=algorithm.upper(),
+            )
 
-            # Title: algorithm name on top row
-            if task_idx == 0:
-                ax.set_title(algorithm.upper(), fontsize=10, fontweight="bold")
+        # Formatting
+        ax.set_xlabel("Number of Simulations", fontsize=9)
+        ax.set_ylabel(metric.replace("_", " ").title(), fontsize=9)
+        ax.grid(True, alpha=0.3)
 
-            # Task label on left column
-            if algo_idx == 0:
-                ax.text(
-                    -0.45,
-                    0.5,
-                    task_name.replace("_", " ").title(),
-                    transform=ax.transAxes,
-                    fontsize=9,
-                    fontweight="bold",
-                    ha="right",
-                    va="center",
-                    rotation=90,
-                )
+        # Set x-axis ticks to actual simulation values
+        x_ticks = sorted(df["num_simulations"].unique())
+        ax.set_xticks(x_ticks)
+        ax.tick_params(axis="x", rotation=45, labelsize=8)
+        ax.tick_params(axis="y", labelsize=8)
+
+        # Task name as subplot title
+        ax.set_title(
+            task_name.replace("_", " ").title(),
+            fontsize=10,
+            fontweight="bold",
+        )
+
+    # Add shared figure legend
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.02),
+        ncol=len(algorithms),
+        fontsize=9,
+    )
 
     # Add overall title if provided
     if title:
-        fig.suptitle(title, fontsize=12, y=0.995, fontweight="bold")
+        fig.suptitle(title, fontsize=12, y=1.02, fontweight="bold")
 
-    plt.tight_layout(rect=[0.05, 0, 1, 0.99])
+    plt.tight_layout()
 
     return fig
 
