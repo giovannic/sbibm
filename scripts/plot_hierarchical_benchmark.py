@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import pandas as pd
 
 
@@ -94,7 +95,6 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
 def create_grid_plot(
     results: dict,
     metric: str,
-    title: str | None = None,
     config: str = "manuscript",
 ):
     """Create a grid of line plots for all tasks with algorithms overlaid.
@@ -103,7 +103,6 @@ def create_grid_plot(
         results: Dict mapping task_name -> DataFrame with
                  columns: algorithm, num_simulations, metric
         metric: Name of the metric column to plot
-        title: Optional title for the entire figure
         config: Styling configuration ('manuscript' or 'streamlit')
 
     Returns:
@@ -112,11 +111,11 @@ def create_grid_plot(
     # Set style based on config
     if config == "manuscript":
         plt.rcParams["font.size"] = 9
-        cell_width = 5.0
+        cell_width = 3.0
         cell_height = 2.5
     else:  # streamlit
         plt.rcParams["font.size"] = 11
-        cell_width = 6.0
+        cell_width = 4.0
         cell_height = 3.0
 
     plt.style.use("seaborn-v0_8-whitegrid")
@@ -134,18 +133,19 @@ def create_grid_plot(
 
     n_tasks = len(tasks)
 
-    # Create figure with one column of subplots
-    figsize = (cell_width, cell_height * n_tasks)
+    # Create figure with one row of subplots (tasks as columns)
+    figsize = (cell_width * n_tasks, cell_height)
     fig, axes = plt.subplots(
-        n_tasks,
         1,
+        n_tasks,
         figsize=figsize,
         squeeze=False,
+        sharey=True,
     )
 
     # Plot each task with all algorithms overlaid
     for task_idx, task_name in enumerate(tasks):
-        ax = axes[task_idx, 0]
+        ax = axes[0, task_idx]
         df = results[task_name]
 
         for algorithm in algorithms:
@@ -169,6 +169,7 @@ def create_grid_plot(
             color = algo_colors[algorithm]
 
             # Plot line with error bars
+            label = "NPE" if algorithm == "snpe" else algorithm.upper()
             ax.errorbar(
                 grouped["num_simulations"],
                 grouped["mean"],
@@ -178,23 +179,28 @@ def create_grid_plot(
                 markersize=5,
                 linewidth=2,
                 capsize=3,
-                label=algorithm.upper(),
+                label=label,
             )
 
         # Formatting
         ax.set_xlabel("Number of Simulations", fontsize=9)
-        ax.set_ylabel(metric.replace("_", " ").title(), fontsize=9)
+        if task_idx == 0:
+            ax.set_ylabel(metric.replace("_", " ").title(), fontsize=9)
         ax.grid(True, alpha=0.3)
 
-        # Set x-axis ticks to actual simulation values
+        # Set x-axis ticks to actual simulation values in standard form
         x_ticks = sorted(df["num_simulations"].unique())
         ax.set_xticks(x_ticks)
+        ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+        ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
         ax.tick_params(axis="x", rotation=45, labelsize=8)
         ax.tick_params(axis="y", labelsize=8)
 
-        # Task name as subplot title
+        # Task name as subplot title (keep SIR and SLCP uppercase)
+        title = task_name.replace("_", " ").title()
+        title = title.replace("Sir", "SIR").replace("Slcp", "SLCP")
         ax.set_title(
-            task_name.replace("_", " ").title(),
+            title,
             fontsize=10,
             fontweight="bold",
         )
@@ -209,10 +215,6 @@ def create_grid_plot(
         ncol=len(algorithms),
         fontsize=9,
     )
-
-    # Add overall title if provided
-    if title:
-        fig.suptitle(title, fontsize=12, y=1.02, fontweight="bold")
 
     plt.tight_layout()
 
@@ -256,12 +258,6 @@ def main():
         choices=["manuscript", "streamlit"],
         default="manuscript",
         help="Styling configuration",
-    )
-    parser.add_argument(
-        "--title",
-        type=str,
-        default=None,
-        help="Custom title for the plot",
     )
     parser.add_argument(
         "--verbose",
@@ -316,7 +312,6 @@ def main():
     fig = create_grid_plot(
         results=results,
         metric=args.metric,
-        title=args.title,
         config=args.config,
     )
 
