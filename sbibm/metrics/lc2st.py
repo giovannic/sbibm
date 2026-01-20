@@ -72,8 +72,8 @@ def lc2st(
     # Sample from posterior conditioned on observation
     theta_q = posterior.sample((num_calibration_samples,), x=xs)
 
-    n_layers = 1
-    latent_dim = 16
+    n_layers = 2
+    latent_dim = 512
     key = jr.PRNGKey(0)
     rngs = nnx.Rngs(0)
 
