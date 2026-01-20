@@ -143,8 +143,8 @@ class HierarchicalSLCP(Task):
 
         # Define hierarchical prior distribution
         # Global parameters: [s1, s2, rho]
-        # s1, s2 ~ Uniform(-3.0, 3.0), rho ~ Uniform(-3, 3)
-        s_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([2]).to_event(1)
+        # s1, s2 ~ Uniform(0.1, 3.0), rho ~ Uniform(-3, 3)
+        s_dist = pdist.Uniform(0.1, 3.0, validate_args=False).expand([2]).to_event(1)
         rho_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([1]).to_event(1)
         global_dist = BlockwiseDistribution([s_dist, rho_dist])
 
@@ -274,9 +274,9 @@ class HierarchicalSLCP(Task):
         # Build composite transform for MCMC
         transforms_list = []
 
-        # s1, s2: Uniform[-3.0, 3.0] <-> R
+        # s1, s2: Uniform[0.1, 3.0] <-> R
         for _ in range(2):
-            transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
+            transforms_list.append(biject_to(constraints.interval(0.1, 3.0)))
 
         # rho: Uniform[-3, 3] <-> R
         transforms_list.append(biject_to(constraints.interval(-3.0, 3.0)))
