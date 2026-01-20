@@ -479,7 +479,7 @@ class HierarchicalSIR(Task):
                     data[
                         idx_contains_no_nan,
                         region_idx * 10 : (region_idx + 1) * 10,
-                    ] = data_region
+                    ] = data_region / self.total_count
 
                 return data
 
