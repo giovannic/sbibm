@@ -18,7 +18,7 @@ from sbibm.tasks.task import Task
 
 
 class HierarchicalSLCP(Task):
-    def __init__(self, n_l: int = 5):
+    def __init__(self, n_l: int = 5, device: str = 'cpu'):
         """Hierarchical SLCP
 
         Hierarchical extension of the SLCP (Simple Likelihood Complex Posterior)
@@ -113,6 +113,7 @@ class HierarchicalSLCP(Task):
         """
         self.n_l = n_l
         self.num_data = 4  # 4 observations per context (as in original SLCP)
+        self.device = device
 
         # Observation seeds
         observation_seeds = [
@@ -144,8 +145,10 @@ class HierarchicalSLCP(Task):
         # Define hierarchical prior distribution
         # Global parameters: [s1, s2, rho]
         # s1, s2 ~ Uniform(0.1, 3.0), rho ~ Uniform(-3, 3)
-        s_dist = pdist.Uniform(0.1, 3.0, validate_args=False).expand([2]).to_event(1)
-        rho_dist = pdist.Uniform(-3.0, 3.0, validate_args=False).expand([1]).to_event(1)
+        point_one = torch.tensor(0.1).to(device=device)
+        three = torch.tensor(3.0).to(device=device)
+        s_dist = pdist.Uniform(point_one, three, validate_args=False).expand([2]).to_event(1)
+        rho_dist = pdist.Uniform(-three, three, validate_args=False).expand([1]).to_event(1)
         global_dist = BlockwiseDistribution([s_dist, rho_dist])
 
         # Local params distribution: means for each context
@@ -154,7 +157,7 @@ class HierarchicalSLCP(Task):
             # local_params: 2*n_local_arg dims, all ~ Uniform(-3, 3)
             batch_shape = global_params.shape[:-1]
             local_dist = (
-                pdist.Uniform(-3.0, 3.0, validate_args=False)
+                pdist.Uniform(-three, three, validate_args=False)
                 .expand(list(batch_shape) + [2 * n_local_arg])
                 .to_event(1)
             )
@@ -214,7 +217,7 @@ class HierarchicalSLCP(Task):
             rho = torch.nn.Tanh()(rho_param)
 
             # Build covariance matrix for all samples
-            S = torch.empty((num_samples, 2, 2))
+            S = torch.empty((num_samples, 2, 2)).to(device=self.device)
             S[:, 0, 0] = s1**2
             S[:, 0, 1] = rho * s1 * s2
             S[:, 1, 0] = rho * s1 * s2
@@ -329,7 +332,7 @@ class HierarchicalSLCP(Task):
         rho = torch.nn.Tanh()(rho_param)
 
         # Build covariance matrix
-        S = torch.empty((batch_size, 2, 2))
+        S = torch.empty((batch_size, 2, 2)).to(device=self.device)
         S[:, 0, 0] = s1**2
         S[:, 0, 1] = rho * s1 * s2
         S[:, 1, 0] = rho * s1 * s2
