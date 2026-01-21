@@ -253,7 +253,7 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
         samples = prior_dist.sample(sample_shape=torch.Size([n_samples]))
 
         # Convert to JAX arrays
-        samples_jax = jnp.asarray(samples)
+        samples_jax = jnp.asarray(samples.cpu())
 
         # Create structured dict for TFMPE
         param_dict = {}
@@ -312,7 +312,7 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
         obs_torch = task.get_simulator()(params_torch)
 
         # Convert back to JAX and reshape to n groups
-        obs_jax = jnp.asarray(obs_torch.numpy()).reshape(
+        obs_jax = jnp.asarray(obs_torch.cpu().numpy()).reshape(
             obs_torch.shape[0], n, -1, 1
         )
         obs_dict = {"y": obs_jax}
