@@ -404,7 +404,7 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False, device='cpu'
             if str.startswith(name, "p_l_"):
                 component_params = samples[:, start:end]
                 reshaped = component_params.reshape(samples.shape[0], n, -1)
-                reshaped_jax = jnp.asarray(reshaped[..., None])
+                reshaped_jax = jnp.asarray(reshaped[..., None].cpu())
                 local_params_dict[name] = reshaped_jax
 
         return local_params_dict, None

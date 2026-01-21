@@ -26,7 +26,7 @@ def lc2st(
     posterior_samples: torch.Tensor,
     num_calibration_samples: int = 1000,
     num_trials: int = 100,
-    n_epochs: int = 1000,
+    n_epochs: int = 100,
     alpha: float = 0.05,
     **kwargs: Any,
 ) -> Dict[str, Any]:
@@ -72,8 +72,8 @@ def lc2st(
     # Sample from posterior conditioned on observation
     theta_q = posterior.sample((num_calibration_samples,), x=xs)
 
-    n_layers = 2
-    latent_dim = 512
+    n_layers = 1
+    latent_dim = 16
     key = jr.PRNGKey(0)
     rngs = nnx.Rngs(0)
 
