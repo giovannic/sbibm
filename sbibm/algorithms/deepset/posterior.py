@@ -7,6 +7,8 @@ sbibm metrics and benchmarking.
 
 import torch
 from .utils import reshape_observations
+from einops import rearrange
+
 
 class HierarchicalPosterior:
     """
@@ -40,10 +42,10 @@ class HierarchicalPosterior:
         # Encode observation to get contexts for posterior
         self._encode_observation()
 
-    def _get_context(self, observation):
+    def _get_context(self, observations):
         with torch.no_grad():
             # Create batch of size 1 with observation
-            x_batch = observation.unsqueeze(0)  # (1, n_events, dim)
+            x_batch = observations # (n_obs, n_events, dim)
             n_batch = x_batch.shape[0]
 
             # Pad observation to match n_set_max if needed
@@ -58,8 +60,6 @@ class HierarchicalPosterior:
                 x_batch = torch.cat([x_batch, padding], dim=1)
 
             # Forward pass through encoder
-            from einops import rearrange
-
             x_enc = self.model.deep_set.enc(rearrange(x_batch, "b n d -> (b n) d"))
             x_enc = rearrange(
                 x_enc,
@@ -70,19 +70,21 @@ class HierarchicalPosterior:
 
             # Create mask for valid observations
             mask = torch.ones(n_batch, n_set_max, device=self.device)
-            mask[:, observation.shape[0] :] = 0  # noqa: E203
+            mask[:, observations.shape[1] :] = 0  # noqa: E203
 
-            # Split features
-            x, x_local = torch.chunk(x_enc, 2, -1)
+            # Split encoder output in half: global vs local features
+            # enc_dim = encoder output dim, split_dim = enc_dim // 2
+            x, x_local = torch.chunk(x_enc, 2, -1)  # (b, n, split_dim) each
 
             # Global aggregation
-            x_global = x.sum(-2) / mask.sum(1)[:, None]
+            x_global = x.sum(-2) / mask.sum(1)[:, None]  # (b, split_dim)
             x_global = torch.cat([x_global, mask.sum(1, keepdim=True)], -1)
 
             # Local features
-            obs_len = observation.shape[0]
-            local_contexts = x_local[0, :obs_len]  # noqa: E203
+            obs_len = observations.shape[1]
+            local_contexts = x_local[:, :obs_len]  # noqa: E203
 
+            # global_context: (b, dec_out), local_contexts: (b, obs_len, split_dim)
             return self.model.deep_set.dec(x_global), local_contexts
 
     def _encode_observation(self):
@@ -90,10 +92,13 @@ class HierarchicalPosterior:
         (
             self.global_context,
             self.local_contexts
-        ) = self._get_context(self.observation)
+        ) = self._get_context(self.observation.unsqueeze(0))
 
-    def _sample(self, num_samples, observation):
-        global_context, local_contexts = self._get_context(observation)
+    def _sample(self, num_samples, observations):
+        global_context, local_contexts = self._get_context(observations)
+        # Need to batch the contexts
+        # then avoid the reshaping
+        # but not break single sample
         with torch.no_grad():
             # Sample global parameters
             # Note: flow.sample(num_samples, context) returns shape
@@ -102,35 +107,43 @@ class HierarchicalPosterior:
                 num_samples,
                 context=global_context,
             )
-            # Reshape from (1, num_samples, dim) to (num_samples, dim)
-            global_samples = global_samples.squeeze(0)
 
             # Sample local parameters (conditioned on global if applicable)
-            num_events = observation.shape[0]
+            num_events = observations.shape[1]
+            n_batch = observations.shape[0]
             local_samples = []
 
             if self.model.deep_set.condition_local_on_global:
                 # When conditioning local on global, need to sample each
                 # local parameter with the actual global sample values
                 for i in range(num_events):
-                    local_ctx = local_contexts[i : i + 1]  # noqa: E203
+                    local_ctx = local_contexts[:, i : i + 1]  # noqa: E203
                     # Concatenate with global samples
                     local_ctx_expanded = torch.cat(
-                        [local_ctx.expand(num_samples, -1), global_samples],
+                        [local_ctx.expand(n_batch, num_samples, -1), global_samples],
                         dim=-1,
                     )
                     # Now sample 1 sample per global sample
+                    local_ctx_expanded = rearrange(local_ctx_expanded, "b n d -> (b n) d")
                     local_sample = self.model.deep_set.flow_local.sample(
                         1,
                         context=local_ctx_expanded,
                     )
-                    # Shape is (num_samples, 1, dim) -> squeeze to
-                    # (num_samples, dim)
-                    local_samples.append(local_sample.squeeze(1))
+                    local_sample = rearrange(
+                        local_sample,
+                        "(b n) i d -> b (n i) d",
+                        b=n_batch,
+                        n=num_samples,
+                        i=1,
+                    )
+                    local_samples.append(local_sample)
+                    # Shape is (batch, num_samples, 1, dim) -> squeeze to
+                    # (batch, num_samples, dim)
+                    # local_samples.append(local_sample.squeeze(2))
             else:
                 # Sample all local parameters independently
                 for i in range(num_events):
-                    local_ctx = local_contexts[i : i + 1]  # noqa: E203
+                    local_ctx = local_contexts[:, i : i + 1]  # noqa: E203
                     local_sample = self.model.deep_set.flow_local.sample(
                         num_samples,
                         context=local_ctx,
@@ -142,7 +155,7 @@ class HierarchicalPosterior:
             all_local = torch.cat(local_samples, dim=-1)
             samples = torch.cat([global_samples, all_local], dim=-1)
 
-            return samples
+            return samples.squeeze(1)
 
 
     def sample(self, shape=(), x=None):
@@ -164,13 +177,10 @@ class HierarchicalPosterior:
             num_samples *= dim
 
         if x is None:
-            samples = self._sample(num_samples, self.observation)
+            samples = self._sample(num_samples, self.observation.unsqueeze(0))
         else:
             x = reshape_observations(self.task, x)
-            samples = torch.cat([
-                self._sample(1, x[i])
-                for i in range(x.shape[0])
-            ])
+            samples = self._sample(1, x)
             return samples
 
         return samples.reshape(*shape, -1)
@@ -209,7 +219,7 @@ class HierarchicalPosterior:
             log_prob_local_total = torch.zeros(batch_size, device=self.device)
 
             for i in range(num_events):
-                local_context = self.local_contexts[i : i + 1]  # noqa: E203
+                local_context = self.local_contexts[0, i : i + 1]  # noqa: E203
                 local_context_expanded = local_context.expand(batch_size, -1)
 
                 if self.model.deep_set.condition_local_on_global:
