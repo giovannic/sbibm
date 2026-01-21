@@ -114,7 +114,7 @@ class TwoMoons(Task):
 
     @staticmethod
     def _map_fun(parameters: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
-        ang = torch.tensor([-math.pi / 4.0])
+        ang = torch.tensor([-math.pi / 4.0]).to(device=parameters.device)
         c = torch.cos(ang)
         s = torch.sin(ang)
         z0 = (c * parameters[:, 0] - s * parameters[:, 1]).reshape(-1, 1)
@@ -123,7 +123,7 @@ class TwoMoons(Task):
 
     @staticmethod
     def _map_fun_inv(parameters: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
-        ang = torch.tensor([-math.pi / 4.0])
+        ang = torch.tensor([-math.pi / 4.0]).to(device=parameters.device)
         c = torch.cos(ang)
         s = torch.sin(ang)
         z0 = (c * parameters[:, 0] - s * parameters[:, 1]).reshape(-1, 1)

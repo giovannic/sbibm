@@ -23,7 +23,7 @@ from sbibm.utils.io import save_convergence_stats
 
 
 class HierarchicalTwoMoons(Task):
-    def __init__(self, n_l: int = 5, invalid_log_prob=1e-10):
+    def __init__(self, n_l: int = 5, invalid_log_prob=1e-10, device: str = 'cpu'):
         """Hierarchical Two Moons
 
         Hierarchical extension of the Two Moons task where each observation
@@ -121,6 +121,7 @@ class HierarchicalTwoMoons(Task):
         """
         self.n_l = n_l
         self.invalid_log_prob = invalid_log_prob
+        self.device = device
 
         # Observation seeds
         observation_seeds = [
@@ -160,8 +161,14 @@ class HierarchicalTwoMoons(Task):
 
         # Define hierarchical prior distribution
         # Global parameters: [loc_0, loc_1, scale_0, scale_1]
-        global_loc_dist = pdist.Uniform(-1.0, 1.0, validate_args=False).expand([2]).to_event(1)
-        global_scale_dist = pdist.Uniform(0.1, 3.0, validate_args=False).expand([2]).to_event(1)
+        one, point_one, three = (
+            torch.tensor(1.).to(device=device),
+            torch.tensor(.1).to(device=device),
+            torch.tensor(3.).to(device=device)
+        )
+
+        global_loc_dist = pdist.Uniform(-one, one, validate_args=False).expand([2]).to_event(1)
+        global_scale_dist = pdist.Uniform(point_one, three, validate_args=False).expand([2]).to_event(1)
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
@@ -279,7 +286,7 @@ class HierarchicalTwoMoons(Task):
                         torch.sin(a) * r,
                     ),
                     dim=1,
-                )
+                ).to(device=self.device)
 
                 # Apply two_moons mapping function
                 obs_i = TwoMoons._map_fun(context_params, p)
@@ -366,11 +373,11 @@ class HierarchicalTwoMoons(Task):
             u = p[:, 0] - self.simulator_params["base_offset"]
             v = p[:, 1]
 
-            r = torch.sqrt(u**2 + v**2)
+            r = torch.sqrt(u**2 + v**2).to(device=self.device)
             log_lik_context = -0.5 * (
                 (r - self.simulator_params["r_loc"]) / self.simulator_params["r_scale"]
             ) ** 2 - 0.5 * torch.log(
-                2 * torch.tensor([math.pi]) * self.simulator_params["r_scale"] ** 2
+                2 * torch.tensor([math.pi]).to(device=self.device) * self.simulator_params["r_scale"] ** 2
             )
 
             # Handle invalid region (u < 0)
