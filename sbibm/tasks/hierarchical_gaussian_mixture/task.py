@@ -23,6 +23,7 @@ class HierarchicalGaussianMixture(Task):
         n_l: int = 5,
         dim: int = 1,
         prior_bound: float = 10.0,
+        device: str = 'cpu'
     ):
         """Hierarchical Gaussian Mixture
 
@@ -128,7 +129,7 @@ class HierarchicalGaussianMixture(Task):
         """
         self.n_l = n_l
         self.dim = dim
-        self.prior_bound = prior_bound
+        self.prior_bound = torch.tensor(prior_bound).to(device=device)
 
         # Observation seeds (same as original task)
         observation_seeds = [
@@ -159,18 +160,25 @@ class HierarchicalGaussianMixture(Task):
 
         # Store simulator params from original gaussian_mixture
         self.simulator_params = {
-            "mixture_locs_factor": torch.tensor([1.0, 1.0]),
-            "mixture_scales": torch.tensor([1.0, 0.1]),
-            "mixture_weights": torch.tensor([0.5, 0.5]),
+            "mixture_locs_factor": torch.tensor([1.0, 1.0]).to(device=device),
+            "mixture_scales": torch.tensor([1.0, 0.1]).to(device=device),
+            "mixture_weights": torch.tensor([0.5, 0.5]).to(device=device),
         }
 
         # Define hierarchical prior distribution
         # Global parameters: [loc_0, ..., loc_{dim-1}, scale_0, ...,
         # scale_{dim-1}]
         global_loc_dist = (
-            pdist.Uniform(-prior_bound, prior_bound, validate_args=False).expand([dim]).to_event(1)
+            pdist.Uniform(
+                -self.prior_bound,
+                self.prior_bound,
+                validate_args=False
+            ).expand([dim]).to_event(1)
         )
-        global_scale_dist = pdist.HalfNormal(1.0, validate_args=False).expand([dim]).to_event(1)
+        global_scale_dist = pdist.HalfNormal(
+            torch.tensor(1.0).to(device=device),
+            validate_args=False
+        ).expand([dim]).to_event(1)
         global_dist = BlockwiseDistribution([global_loc_dist, global_scale_dist])
 
         # Local params distribution conditioned on global
