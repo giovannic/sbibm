@@ -21,7 +21,8 @@ class HierarchicalGaussianLinear(Task):
         n_l: int = 5,
         prior_scale: float = 1.0,
         simulator_scale: float = 1.0,
-        dim_local_per_context: int = 1
+        dim_local_per_context: int = 1,
+        device: str = 'cpu'
     ):
         """Hierarchical Gaussian Linear
 
@@ -158,7 +159,10 @@ class HierarchicalGaussianLinear(Task):
         # Expand([1]) to get batch_shape=[], event_shape=[1], then use expand_by
         # to ensure proper 2D sampling
         global_dist = pdist.Independent(
-            pdist.HalfNormal(simulator_scale, validate_args=False).expand([1]), 1
+            pdist.HalfNormal(
+                torch.tensor(simulator_scale).to(device=device),
+                validate_args=False
+            ).expand([1]), 1
         )
 
         # Local parameters: context-specific means
@@ -171,8 +175,8 @@ class HierarchicalGaussianLinear(Task):
             total_local_dim = n_local * dim_local_per_context
             return pdist.Independent(
                 pdist.Normal(
-                    loc=torch.zeros(total_local_dim),
-                    scale=prior_scale * torch.ones(total_local_dim),
+                    loc=torch.zeros(total_local_dim).to(device=device),
+                    scale=prior_scale * torch.ones(total_local_dim).to(device=device),
                 ).expand(list(batch_shape) + [total_local_dim]),
                 1,
             )

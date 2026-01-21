@@ -85,7 +85,7 @@ def run_benchmark(
 
     # Load task
     log.info(f"Loading task: {task_name} with n_l={n_l}")
-    task = sbibm.get_task(task_name, n_l=n_l)
+    task = sbibm.get_task(task_name, n_l=n_l, device=algorithm_kwargs.get('device', 'cpu'))
 
     # Extract n_l for hierarchical tasks (reduce simulations for SNPE)
     n_l = getattr(task, 'n_l', 1)
@@ -163,6 +163,7 @@ def run_benchmark(
             task=task,
             num_observation=num_observation,
             num_samples=num_samples,
+            device=algorithm_kwargs.get('device', 'cpu')
         )
         results["reverse_kl"] = rkl.item()
         log.info(f"Reverse KL: {rkl.item():.6f}")

@@ -82,7 +82,7 @@ def run(
 
     prior = task.get_prior_dist()
     if observation is None:
-        observation = task.get_observation(num_observation)
+        observation = task.get_observation(num_observation).to(device=device)
 
     simulator = task.get_simulator(max_calls=num_simulations)
 
@@ -136,7 +136,7 @@ def run(
 
     if num_observation is not None:
         true_parameters = task.get_true_parameters(num_observation=num_observation)
-        log_prob_true_parameters = posterior.log_prob(true_parameters)
+        log_prob_true_parameters = posterior.log_prob(true_parameters.to(device=device))
         return samples, simulator.num_simulations, log_prob_true_parameters, posterior
     else:
         return samples, simulator.num_simulations, None, posterior

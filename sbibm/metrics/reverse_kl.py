@@ -13,6 +13,7 @@ def reverse_kl(
     task: Task,
     num_observation: int,
     num_samples: int = 10000,
+    device: str = 'cpu'
 ) -> torch.Tensor:
     """Estimate reverse KL divergence without reference posterior samples
 
@@ -50,7 +51,7 @@ def reverse_kl(
     log_p_prior = prior_dist.log_prob(samples)
 
     # Get observation and compute likelihood
-    observation = task.get_observation(num_observation)
+    observation = task.get_observation(num_observation).to(device=device)
     # Observations already have batch dimension [1, dim_data]
     # Expand to match sample batch size
     observation_expanded = observation.expand(samples.shape[0], -1)
