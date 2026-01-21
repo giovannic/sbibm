@@ -31,6 +31,7 @@ class HierarchicalSIR(Task):
         saveat: float = 1.0,
         total_count: int = 1000,
         summary: Optional[str] = "subsample",
+        device: str = 'cpu'
     ):
         """Hierarchical SIR epidemic model
 
@@ -152,6 +153,7 @@ class HierarchicalSIR(Task):
         self.saveat = saveat
         self.total_count = total_count
         self.summary = summary
+        self.device = device
 
         self.dim_data_raw = int(3 * (days / saveat + 1))
 
@@ -192,8 +194,8 @@ class HierarchicalSIR(Task):
         # Define hierarchical prior distribution
         # Global parameter: gamma (recovery rate)
         global_dist = pdist.LogNormal(
-            loc=torch.tensor([math.log(0.125)]),
-            scale=torch.tensor([0.2]),
+            loc=torch.tensor([math.log(0.125)]).to(device=device),
+            scale=torch.tensor([0.2]).to(device=device),
             validate_args=False
         ).to_event(1)
 
@@ -204,8 +206,8 @@ class HierarchicalSIR(Task):
             batch_shape = global_params.shape[:-1]
             return pdist.Independent(
                 pdist.LogNormal(
-                    loc=torch.tensor(math.log(0.4)),
-                    scale=torch.tensor(0.5),
+                    loc=torch.tensor(math.log(0.4)).to(device=device),
+                    scale=torch.tensor(0.5).to(device=device),
                     validate_args=False
                 ).expand(list(batch_shape) + [n_local]),
                 1,
@@ -370,26 +372,25 @@ class HierarchicalSIR(Task):
         Returns:
             Trajectories shape (num_samples, n_local, 3, num_timepoints)
         """
-        num_samples = parameters.shape[0]
-        # Infer n_local from parameter shape
-        n_local = parameters.shape[1] - 1
-
         # Extract gamma and beta for each sample
         gamma = parameters[:, 0]  # (num_samples,)
         beta = parameters[:, 1:]  # (num_samples, n_local)
 
         # Convert to JAX arrays
-        gamma_jax = jnp.array(gamma.numpy())  # (num_samples,)
-        beta_jax = jnp.array(beta.numpy())  # (num_samples, n_local)
+        gamma_jax = jnp.array(gamma.cpu().numpy())  # (num_samples,)
+        beta_jax = jnp.array(beta.cpu().numpy())  # (num_samples, n_local)
 
         # Solve in JAX
         trajectories_jax = self._solve_ode_trajectories_jax(
-            gamma_jax, beta_jax
+            gamma_jax,
+            beta_jax
         )
 
         # Convert back to PyTorch
         trajectories_np = numpy.asarray(trajectories_jax).copy()
-        trajectories = torch.from_numpy(trajectories_np).to(torch.float32)
+        trajectories = torch.from_numpy(trajectories_np).to(torch.float32).to(
+            device=self.device
+        )
 
         return trajectories.float()
 
@@ -454,7 +455,9 @@ class HierarchicalSIR(Task):
             elif self.summary == "subsample":
                 # Infer dim_data from n_local (10 per region)
                 dim_data = 10 * n_local
-                data = float("nan") * torch.ones((num_samples, dim_data))
+                data = float("nan") * torch.ones((num_samples, dim_data)).to(
+                    device=self.device
+                )
                 if len(idx_contains_nan) == num_samples:
                     return data
 
@@ -553,7 +556,7 @@ class HierarchicalSIR(Task):
 
             log_likelihoods.append(sample_log_likelihood)
 
-        log_likelihoods = torch.tensor(log_likelihoods)
+        log_likelihoods = torch.tensor(log_likelihoods).to(device=self.device)
 
         if log:
             return log_likelihoods
