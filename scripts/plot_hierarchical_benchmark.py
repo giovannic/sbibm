@@ -19,7 +19,9 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
 import pandas as pd
+from scipy.stats import bootstrap
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -92,10 +94,179 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
     return results
 
 
+def load_n_l_scaling_results(input_dir: Path) -> dict:
+    """Load n_l scaling benchmark results for all hierarchical tasks.
+
+    Args:
+        input_dir: Directory containing n_l scaling CSV files
+                   Filename pattern: {task}_{algorithm}_{num_simulations}_{n_l}.csv
+
+    Returns:
+        Dict mapping task_name -> DataFrame with all results
+    """
+    log = logging.getLogger(__name__)
+
+    # Find all hierarchical_*.csv files
+    pattern = "hierarchical_*.csv"
+    csv_files = list(input_dir.glob(pattern))
+
+    if not csv_files:
+        raise ValueError(
+            f"No CSV files found matching pattern '{pattern}' in {input_dir}"
+        )
+
+    log.info(f"Found {len(csv_files)} n_l scaling result files")
+
+    # Load all CSVs and group by task name
+    results = {}
+    for csv_file in csv_files:
+        log.debug(f"Loading {csv_file.name}")
+        df = pd.read_csv(csv_file)
+
+        # For multi-row files (repetitions), take the last row only
+        if len(df) > 1:
+            log.debug(f"  Taking last row from {len(df)} rows (repetitions)")
+            df = df.tail(1)
+
+        # Extract task name from 'task' column
+        if len(df) > 0 and "task" in df.columns:
+            task_name = df["task"].iloc[0]
+
+            if task_name not in results:
+                results[task_name] = []
+            results[task_name].append(df)
+
+    # Concatenate all DataFrames per task
+    for task_name in sorted(results.keys()):
+        results[task_name] = pd.concat(results[task_name], ignore_index=True)
+        df = results[task_name]
+        log.info(f"Loaded {len(df)} n_l configurations for '{task_name}'")
+
+        # Apply scaling based on algorithm
+        # n_l is stored in num_observation column
+        snpe_mask = df["algorithm"] == "snpe"
+        deepset_mask = df["algorithm"] == "deepset"
+
+        if snpe_mask.any():
+            # SNPE: scale by n_l (num_observation)
+            df.loc[snpe_mask, "num_simulations"] *= df.loc[
+                snpe_mask, "num_observation"
+            ].astype(int)
+            log.info("  Scaled SNPE num_simulations by n_l")
+
+        if deepset_mask.any():
+            # DeepSet: scale by (n_l + 1) // 2
+            deepset_scale = (df.loc[deepset_mask, "num_observation"].astype(int) + 1) // 2
+            df.loc[deepset_mask, "num_simulations"] *= deepset_scale
+            log.info("  Scaled DeepSet num_simulations by (n_l + 1) // 2")
+
+    return results
+
+
+def _plot_task_panel(
+    ax,
+    df: pd.DataFrame,
+    metric: str,
+    algorithms: list,
+    algo_colors: dict,
+    x_column: str,
+    x_label: str,
+    show_title: bool = False,
+    title: str = "",
+    show_ylabel: bool = False,
+    ylabel: str = "",
+):
+    """Plot a single task panel with all algorithms overlaid.
+
+    Args:
+        ax: Matplotlib axes object
+        df: DataFrame with columns: algorithm, x_column, metric
+        metric: Name of the metric column to plot
+        algorithms: List of algorithm names to plot
+        algo_colors: Dict mapping algorithm name to color
+        x_column: Column name for x-axis values
+        x_label: Label for x-axis
+        show_title: Whether to show subplot title
+        title: Title text for subplot
+        show_ylabel: Whether to show y-axis label
+        ylabel: Label for y-axis
+    """
+    for algorithm in algorithms:
+        # Filter data for this algorithm
+        algo_df = df[df["algorithm"] == algorithm]
+
+        if len(algo_df) == 0:
+            continue
+
+        # Group by x_column and compute bootstrap CIs
+        x_values = []
+        means = []
+        lower_errs = []
+        upper_errs = []
+
+        for x_val, group in algo_df.groupby(x_column):
+            data = group[metric].values
+            mean = np.mean(data)
+            x_values.append(x_val)
+            means.append(mean)
+
+            if len(data) > 1:
+                # Compute bootstrap 95% CI
+                res = bootstrap(
+                    (data,),
+                    np.mean,
+                    confidence_level=0.95,
+                    n_resamples=1000,
+                    random_state=42,
+                )
+                lower_errs.append(mean - res.confidence_interval.low)
+                upper_errs.append(res.confidence_interval.high - mean)
+            else:
+                # Single data point, no CI (consistent with previous std-based behavior)
+                lower_errs.append(np.nan)
+                upper_errs.append(np.nan)
+
+        # Get color for this algorithm
+        color = algo_colors[algorithm]
+
+        # Plot line with error bars
+        label = "NPE" if algorithm == "snpe" else algorithm.upper()
+        ax.errorbar(
+            x_values,
+            means,
+            yerr=[lower_errs, upper_errs],
+            marker="o",
+            color=color,
+            markersize=5,
+            linewidth=2,
+            capsize=3,
+            label=label,
+        )
+
+    # Formatting
+    ax.set_xlabel(x_label, fontsize=9)
+    if show_ylabel:
+        ax.set_ylabel(ylabel, fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # Set x-axis ticks to actual values in standard form
+    x_ticks = sorted(df[x_column].unique())
+    ax.set_xticks(x_ticks)
+    ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+    ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
+    ax.tick_params(axis="x", rotation=45, labelsize=8)
+    ax.tick_params(axis="y", labelsize=8)
+
+    if show_title:
+        ax.set_title(title, fontsize=10, fontweight="bold")
+
+
 def create_grid_plot(
     results: dict,
     metric: str,
     config: str = "manuscript",
+    n_l_results: dict | None = None,
+    row_labels: tuple | None = None,
 ):
     """Create a grid of line plots for all tasks with algorithms overlaid.
 
@@ -104,6 +275,8 @@ def create_grid_plot(
                  columns: algorithm, num_simulations, metric
         metric: Name of the metric column to plot
         config: Styling configuration ('manuscript' or 'streamlit')
+        n_l_results: Optional dict for n_l scaling data (enables second row)
+        row_labels: Labels for rows when using two-row layout
 
     Returns:
         matplotlib Figure object
@@ -120,11 +293,17 @@ def create_grid_plot(
 
     plt.style.use("seaborn-v0_8-whitegrid")
 
-    # Extract unique tasks and algorithms
+    # Determine number of rows
+    n_rows = 2 if n_l_results else 1
+
+    # Extract unique tasks and algorithms from both result sets
     tasks = sorted(results.keys())
     all_algorithms = set()
     for df in results.values():
         all_algorithms.update(df["algorithm"].unique())
+    if n_l_results:
+        for df in n_l_results.values():
+            all_algorithms.update(df["algorithm"].unique())
     algorithms = sorted(all_algorithms)
 
     # Assign colors to algorithms in alphabetical order using tab10 palette
@@ -133,85 +312,90 @@ def create_grid_plot(
 
     n_tasks = len(tasks)
 
-    # Create figure with one row of subplots (tasks as columns)
-    figsize = (cell_width * n_tasks, cell_height)
+    # Create figure with appropriate number of rows
+    figsize = (cell_width * n_tasks, cell_height * n_rows)
     fig, axes = plt.subplots(
-        1,
+        n_rows,
         n_tasks,
         figsize=figsize,
         squeeze=False,
-        sharey=True,
+        sharey="row",  # Share y-axis within each row independently
     )
 
-    # Plot each task with all algorithms overlaid
+    # Format metric label
+    metric_label = metric.replace("_", " ").title()
+
+    # Row 0: Simulation budget scaling
     for task_idx, task_name in enumerate(tasks):
         ax = axes[0, task_idx]
         df = results[task_name]
 
-        for algorithm in algorithms:
-            # Filter data for this algorithm
-            algo_df = df[df["algorithm"] == algorithm]
-
-            if len(algo_df) == 0:
-                continue
-
-            # Group by num_simulations and compute stats
-            grouped = (
-                algo_df.groupby("num_simulations")[metric]
-                .agg(["mean", "std", "count"])
-                .reset_index()
-            )
-
-            # Compute 95% CI
-            grouped["ci"] = 1.96 * grouped["std"] / (grouped["count"] ** 0.5)
-
-            # Get color for this algorithm
-            color = algo_colors[algorithm]
-
-            # Plot line with error bars
-            label = "NPE" if algorithm == "snpe" else algorithm.upper()
-            ax.errorbar(
-                grouped["num_simulations"],
-                grouped["mean"],
-                yerr=grouped["ci"],
-                marker="o",
-                color=color,
-                markersize=5,
-                linewidth=2,
-                capsize=3,
-                label=label,
-            )
-
-        # Formatting
-        ax.set_xlabel("Number of Simulations", fontsize=9)
-        if task_idx == 0:
-            ax.set_ylabel(metric.replace("_", " ").title(), fontsize=9)
-        ax.grid(True, alpha=0.3)
-
-        # Set x-axis ticks to actual simulation values in standard form
-        x_ticks = sorted(df["num_simulations"].unique())
-        ax.set_xticks(x_ticks)
-        ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
-        ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
-        ax.tick_params(axis="x", rotation=45, labelsize=8)
-        ax.tick_params(axis="y", labelsize=8)
-
-        # Task name as subplot title (keep SIR and SLCP uppercase)
+        # Format task title
         title = task_name.replace("_", " ").title()
         title = title.replace("Sir", "SIR").replace("Slcp", "SLCP")
-        ax.set_title(
-            title,
-            fontsize=10,
-            fontweight="bold",
+
+        _plot_task_panel(
+            ax=ax,
+            df=df,
+            metric=metric,
+            algorithms=algorithms,
+            algo_colors=algo_colors,
+            x_column="num_simulations",
+            x_label="Number of Simulations",
+            show_title=True,
+            title=title,
+            show_ylabel=(task_idx == 0),
+            ylabel=metric_label,
         )
+
+    # Row 1: n_l scaling (if provided)
+    if n_l_results:
+        for task_idx, task_name in enumerate(tasks):
+            ax = axes[1, task_idx]
+
+            if task_name in n_l_results:
+                df = n_l_results[task_name]
+                _plot_task_panel(
+                    ax=ax,
+                    df=df,
+                    metric=metric,
+                    algorithms=algorithms,
+                    algo_colors=algo_colors,
+                    x_column="num_observation",
+                    x_label="n_l",
+                    show_title=False,
+                    show_ylabel=(task_idx == 0),
+                    ylabel=metric_label,
+                )
+            else:
+                # Empty panel for missing task
+                ax.set_visible(False)
+
+        # Add row labels on the left side
+        if row_labels:
+            for row_idx, label in enumerate(row_labels):
+                # Add text annotation to the left of the first column
+                ax = axes[row_idx, 0]
+                ax.annotate(
+                    label,
+                    xy=(-0.35, 0.5),
+                    xycoords="axes fraction",
+                    fontsize=10,
+                    fontweight="bold",
+                    ha="center",
+                    va="center",
+                    rotation=90,
+                )
 
     # Add shared figure legend
     handles, labels = axes[0, 0].get_legend_handles_labels()
+    # Adjust legend position for two-row layout
+    legend_y = -0.02 if n_rows == 1 else -0.01
     fig.legend(
         handles,
         labels,
         loc="upper center",
-        bbox_to_anchor=(0.5, -0.02),
+        bbox_to_anchor=(0.5, legend_y),
         ncol=len(algorithms),
         fontsize=9,
     )
@@ -270,6 +454,19 @@ def main():
         default=1,
         help="Scaling factor for adjusting num_simulations",
     )
+    parser.add_argument(
+        "--n_l_input_dir",
+        type=str,
+        default=None,
+        help="Optional directory for n_l scaling data (enables second row)",
+    )
+    parser.add_argument(
+        "--row_labels",
+        type=str,
+        nargs=2,
+        default=["Simulation Budget", "n_l"],
+        help="Labels for rows when using two-row layout",
+    )
 
     args = parser.parse_args()
 
@@ -285,6 +482,9 @@ def main():
     log.info(f"Output path: {args.output_path}")
     log.info(f"Config: {args.config}")
     log.info(f"n_l scaling factor: {args.n_l}")
+    if args.n_l_input_dir:
+        log.info(f"n_l scaling directory: {args.n_l_input_dir}")
+        log.info(f"Row labels: {args.row_labels}")
     log.info("=" * 80)
 
     # Validate output path
@@ -296,7 +496,7 @@ def main():
     results = load_all_results(input_dir=Path(args.input_dir), n_l=args.n_l)
 
     # Print summary statistics
-    log.info("\nSummary Statistics:")
+    log.info("\nSummary Statistics (Simulation Budget):")
     log.info(f"  Tasks: {list(results.keys())}")
     for task_name, df in results.items():
         log.info(f"  {task_name}:")
@@ -307,12 +507,30 @@ def main():
         )
         log.info(f"    Total runs: {len(df)}")
 
+    # Load n_l scaling results if provided
+    n_l_results = None
+    if args.n_l_input_dir:
+        n_l_results = load_n_l_scaling_results(input_dir=Path(args.n_l_input_dir))
+
+        log.info("\nSummary Statistics (n_l Scaling):")
+        log.info(f"  Tasks: {list(n_l_results.keys())}")
+        for task_name, df in n_l_results.items():
+            log.info(f"  {task_name}:")
+            log.info(f"    Algorithms: {df['algorithm'].unique().tolist()}")
+            log.info(
+                f"    n_l values: "
+                f"{sorted(df['num_observation'].unique().tolist())}"
+            )
+            log.info(f"    Total configurations: {len(df)}")
+
     # Create grid plot
     log.info(f"Creating grid plot for metric: {args.metric}")
     fig = create_grid_plot(
         results=results,
         metric=args.metric,
         config=args.config,
+        n_l_results=n_l_results,
+        row_labels=tuple(args.row_labels) if n_l_results else None,
     )
 
     # Create output directory if needed
