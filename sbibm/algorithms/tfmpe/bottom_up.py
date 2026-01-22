@@ -272,7 +272,11 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
     return prior_fn
 
 
-def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
+def make_simulator_fn(
+    task,
+    automatic_transforms_enabled: bool = False,
+    device: str = 'cpu'
+    ):
     """Create simulator function for TFMPE.
 
     Args:
@@ -303,7 +307,7 @@ def make_simulator_fn(task, automatic_transforms_enabled: bool = False):
         params_flat = jnp.concatenate(params_list, axis=1)
 
         # Convert to torch and call task simulator
-        params_torch = torch.from_numpy(np.array(params_flat)).float()
+        params_torch = torch.from_numpy(np.array(params_flat)).float().to(device=device)
 
         if automatic_transforms_enabled:
             transforms = task._get_transforms(n_l=n)["parameters"]
@@ -464,7 +468,7 @@ def run(
 
     # Create callback functions for TFMPE using helpers
     prior_fn = make_prior_fn(task, automatic_transforms_enabled)
-    simulator_fn = make_simulator_fn(task, automatic_transforms_enabled)
+    simulator_fn = make_simulator_fn(task, automatic_transforms_enabled, device=device)
     local_fn = make_local_fn(task, automatic_transforms_enabled, device=device)
 
     # Define which parameters are global
