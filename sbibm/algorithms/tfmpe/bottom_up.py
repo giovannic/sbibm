@@ -637,7 +637,7 @@ def run(
             params_list.append(component_flat)
 
         flattened = jnp.concatenate(params_list, axis=1)
-        unconstrained = torch.from_numpy(np.array(flattened)).float()
+        unconstrained = torch.from_numpy(np.array(flattened)).float().to(device=device)
 
         prior_dist = task.prior_dist.for_n_local(n_local)
         if automatic_transforms_enabled:
