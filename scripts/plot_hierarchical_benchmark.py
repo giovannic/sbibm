@@ -94,12 +94,16 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
     return results
 
 
-def load_n_l_scaling_results(input_dir: Path) -> dict:
+def load_n_l_scaling_results(
+    input_dir: Path, n_l_values: list[int] | None = None
+) -> dict:
     """Load n_l scaling benchmark results for all hierarchical tasks.
 
     Args:
         input_dir: Directory containing n_l scaling CSV files
                    Filename pattern: {task}_{algorithm}_{num_simulations}_{n_l}.csv
+        n_l_values: List of n_l values corresponding to rows in CSV files.
+                    Row index i maps to n_l_values[i]. If None, uses row index + 1.
 
     Returns:
         Dict mapping task_name -> DataFrame with all results
@@ -123,10 +127,18 @@ def load_n_l_scaling_results(input_dir: Path) -> dict:
         log.debug(f"Loading {csv_file.name}")
         df = pd.read_csv(csv_file)
 
-        # For multi-row files (repetitions), take the last row only
-        if len(df) > 1:
-            log.debug(f"  Taking last row from {len(df)} rows (repetitions)")
-            df = df.tail(1)
+        # Add n_l column based on row index and provided n_l_values
+        if n_l_values is not None:
+            # Truncate to minimum of CSV rows and n_l_values length
+            n_rows = min(len(df), len(n_l_values))
+            df = df.head(n_rows).copy()
+            df["n_l"] = n_l_values[:n_rows]
+            log.debug(f"  Mapped {n_rows} rows to n_l values: {n_l_values[:n_rows]}")
+        else:
+            # Fallback: use row index + 1 as n_l
+            df = df.copy()
+            df["n_l"] = range(1, len(df) + 1)
+            log.debug(f"  Using row index + 1 as n_l for {len(df)} rows")
 
         # Extract task name from 'task' column
         if len(df) > 0 and "task" in df.columns:
@@ -142,21 +154,18 @@ def load_n_l_scaling_results(input_dir: Path) -> dict:
         df = results[task_name]
         log.info(f"Loaded {len(df)} n_l configurations for '{task_name}'")
 
-        # Apply scaling based on algorithm
-        # n_l is stored in num_observation column
+        # Apply scaling based on algorithm using the n_l column
         snpe_mask = df["algorithm"] == "snpe"
         deepset_mask = df["algorithm"] == "deepset"
 
         if snpe_mask.any():
-            # SNPE: scale by n_l (num_observation)
-            df.loc[snpe_mask, "num_simulations"] *= df.loc[
-                snpe_mask, "num_observation"
-            ].astype(int)
+            # SNPE: scale by n_l
+            df.loc[snpe_mask, "num_simulations"] *= df.loc[snpe_mask, "n_l"].astype(int)
             log.info("  Scaled SNPE num_simulations by n_l")
 
         if deepset_mask.any():
             # DeepSet: scale by (n_l + 1) // 2
-            deepset_scale = (df.loc[deepset_mask, "num_observation"].astype(int) + 1) // 2
+            deepset_scale = (df.loc[deepset_mask, "n_l"].astype(int) + 1) // 2
             df.loc[deepset_mask, "num_simulations"] *= deepset_scale
             log.info("  Scaled DeepSet num_simulations by (n_l + 1) // 2")
 
@@ -175,6 +184,7 @@ def _plot_task_panel(
     title: str = "",
     show_ylabel: bool = False,
     ylabel: str = "",
+    use_scientific_x: bool = True,
 ):
     """Plot a single task panel with all algorithms overlaid.
 
@@ -190,6 +200,7 @@ def _plot_task_panel(
         title: Title text for subplot
         show_ylabel: Whether to show y-axis label
         ylabel: Label for y-axis
+        use_scientific_x: Whether to use scientific notation for x-axis ticks
     """
     for algorithm in algorithms:
         # Filter data for this algorithm
@@ -249,12 +260,15 @@ def _plot_task_panel(
         ax.set_ylabel(ylabel, fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    # Set x-axis ticks to actual values in standard form
+    # Set x-axis ticks to actual values
     x_ticks = sorted(df[x_column].unique())
     ax.set_xticks(x_ticks)
-    ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
-    ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
-    ax.tick_params(axis="x", rotation=45, labelsize=8)
+    if use_scientific_x:
+        ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
+        ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
+        ax.tick_params(axis="x", rotation=45, labelsize=8)
+    else:
+        ax.tick_params(axis="x", labelsize=8)
     ax.tick_params(axis="y", labelsize=8)
 
     if show_title:
@@ -361,11 +375,12 @@ def create_grid_plot(
                     metric=metric,
                     algorithms=algorithms,
                     algo_colors=algo_colors,
-                    x_column="num_observation",
+                    x_column="n_l",
                     x_label="n_l",
                     show_title=False,
                     show_ylabel=(task_idx == 0),
                     ylabel=metric_label,
+                    use_scientific_x=False,
                 )
             else:
                 # Empty panel for missing task
@@ -467,6 +482,13 @@ def main():
         default=["Simulation Budget", "n_l"],
         help="Labels for rows when using two-row layout",
     )
+    parser.add_argument(
+        "--n_l_values",
+        type=int,
+        nargs="+",
+        default=None,
+        help="List of n_l values corresponding to rows in n_l scaling CSVs",
+    )
 
     args = parser.parse_args()
 
@@ -484,6 +506,7 @@ def main():
     log.info(f"n_l scaling factor: {args.n_l}")
     if args.n_l_input_dir:
         log.info(f"n_l scaling directory: {args.n_l_input_dir}")
+        log.info(f"n_l values: {args.n_l_values}")
         log.info(f"Row labels: {args.row_labels}")
     log.info("=" * 80)
 
@@ -510,7 +533,10 @@ def main():
     # Load n_l scaling results if provided
     n_l_results = None
     if args.n_l_input_dir:
-        n_l_results = load_n_l_scaling_results(input_dir=Path(args.n_l_input_dir))
+        n_l_results = load_n_l_scaling_results(
+            input_dir=Path(args.n_l_input_dir),
+            n_l_values=args.n_l_values,
+        )
 
         log.info("\nSummary Statistics (n_l Scaling):")
         log.info(f"  Tasks: {list(n_l_results.keys())}")
@@ -519,7 +545,7 @@ def main():
             log.info(f"    Algorithms: {df['algorithm'].unique().tolist()}")
             log.info(
                 f"    n_l values: "
-                f"{sorted(df['num_observation'].unique().tolist())}"
+                f"{sorted(df['n_l'].unique().tolist())}"
             )
             log.info(f"    Total configurations: {len(df)}")
 
