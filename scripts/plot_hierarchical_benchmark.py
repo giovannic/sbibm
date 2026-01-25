@@ -94,23 +94,17 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
     return results
 
 
-def load_n_l_scaling_results(
-    input_dir: Path, n_l_values: list[int] | None = None
-) -> dict:
+def load_n_l_scaling_results(input_dir: Path) -> dict:
     """Load n_l scaling benchmark results for all hierarchical tasks.
 
     Args:
         input_dir: Directory containing n_l scaling CSV files
-                   Filename pattern: {task}_{algorithm}_{num_simulations}_{n_l}.csv
-        n_l_values: List of n_l values corresponding to rows in CSV files.
-                    Row index i maps to n_l_values[i]. If None, uses row index + 1.
 
     Returns:
         Dict mapping task_name -> DataFrame with all results
     """
     log = logging.getLogger(__name__)
 
-    # Find all hierarchical_*.csv files
     pattern = "hierarchical_*.csv"
     csv_files = list(input_dir.glob(pattern))
 
@@ -121,24 +115,15 @@ def load_n_l_scaling_results(
 
     log.info(f"Found {len(csv_files)} n_l scaling result files")
 
-    # Load all CSVs and group by task name
     results = {}
     for csv_file in csv_files:
         log.debug(f"Loading {csv_file.name}")
         df = pd.read_csv(csv_file)
 
-        # Add n_l column based on row index and provided n_l_values
-        if n_l_values is not None:
-            # Truncate to minimum of CSV rows and n_l_values length
-            n_rows = min(len(df), len(n_l_values))
-            df = df.head(n_rows).copy()
-            df["n_l"] = n_l_values[:n_rows]
-            log.debug(f"  Mapped {n_rows} rows to n_l values: {n_l_values[:n_rows]}")
-        else:
-            # Fallback: use row index + 1 as n_l
-            df = df.copy()
-            df["n_l"] = range(1, len(df) + 1)
-            log.debug(f"  Using row index + 1 as n_l for {len(df)} rows")
+        # Verify n_l column exists
+        if "n_l" not in df.columns:
+            log.warning(f"Skipping {csv_file.name}: missing 'n_l' column")
+            continue
 
         # Extract task name from 'task' column
         if len(df) > 0 and "task" in df.columns:
@@ -482,13 +467,6 @@ def main():
         default=["Simulation Budget", "n_l"],
         help="Labels for rows when using two-row layout",
     )
-    parser.add_argument(
-        "--n_l_values",
-        type=int,
-        nargs="+",
-        default=None,
-        help="List of n_l values corresponding to rows in n_l scaling CSVs",
-    )
 
     args = parser.parse_args()
 
@@ -506,7 +484,6 @@ def main():
     log.info(f"n_l scaling factor: {args.n_l}")
     if args.n_l_input_dir:
         log.info(f"n_l scaling directory: {args.n_l_input_dir}")
-        log.info(f"n_l values: {args.n_l_values}")
         log.info(f"Row labels: {args.row_labels}")
     log.info("=" * 80)
 
@@ -535,7 +512,6 @@ def main():
     if args.n_l_input_dir:
         n_l_results = load_n_l_scaling_results(
             input_dir=Path(args.n_l_input_dir),
-            n_l_values=args.n_l_values,
         )
 
         log.info("\nSummary Statistics (n_l Scaling):")
