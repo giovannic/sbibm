@@ -170,6 +170,7 @@ def _plot_task_panel(
     show_ylabel: bool = False,
     ylabel: str = "",
     use_scientific_x: bool = True,
+    show_xlabel: bool = True,
 ):
     """Plot a single task panel with all algorithms overlaid.
 
@@ -226,7 +227,14 @@ def _plot_task_panel(
         color = algo_colors[algorithm]
 
         # Plot line with error bars
-        label = "NPE" if algorithm == "snpe" else algorithm.upper()
+        if algorithm == "snpe":
+            label = "NPE"
+        elif algorithm == "bottom_up":
+            label = "LF"
+        elif algorithm == "deepset":
+            label = "PF"
+        else:
+            label = algorithm.upper()
         ax.errorbar(
             x_values,
             means,
@@ -240,7 +248,8 @@ def _plot_task_panel(
         )
 
     # Formatting
-    ax.set_xlabel(x_label, fontsize=9)
+    if show_xlabel:
+        ax.set_xlabel(x_label, fontsize=9)
     if show_ylabel:
         ax.set_ylabel(ylabel, fontsize=9)
     ax.grid(True, alpha=0.3)
@@ -345,6 +354,7 @@ def create_grid_plot(
             title=title,
             show_ylabel=(task_idx == 0),
             ylabel=metric_label,
+            show_xlabel=(row_labels is None),
         )
 
     # Row 1: n_l scaling (if provided)
@@ -360,12 +370,13 @@ def create_grid_plot(
                     metric=metric,
                     algorithms=algorithms,
                     algo_colors=algo_colors,
-                    x_column="n_l",
-                    x_label="n_l",
+                    x_column="num_observation",
+                    x_label=r"$n_s$",
                     show_title=False,
                     show_ylabel=(task_idx == 0),
                     ylabel=metric_label,
                     use_scientific_x=False,
+                    show_xlabel=(row_labels is None),
                 )
             else:
                 # Empty panel for missing task
@@ -464,7 +475,7 @@ def main():
         "--row_labels",
         type=str,
         nargs=2,
-        default=["Simulation Budget", "n_l"],
+        default=["Simulation Budget", r"$n_s$"],
         help="Labels for rows when using two-row layout",
     )
 
