@@ -494,11 +494,11 @@ def run(
     # Generate sample data for token creation
     rng = jax.random.PRNGKey(42)
     rng, key = jax.random.split(rng)
-    sample_params, params_f_in = prior_fn(
-        key, n=n_local, n_samples=10
+    sample_params = prior_fn(
+        key, n_local, 10, None
     )
-    sample_obs, obs_f_in = simulator_fn(
-        key, sample_params, n_local
+    sample_obs = simulator_fn(
+        key, sample_params, n_local, None
     )
 
     # Create labeller and independence structure
@@ -509,10 +509,7 @@ def run(
     independence = Independence()
 
     # Create tokens from sample data
-    if params_f_in is not None:
-        f_in = {**params_f_in, **obs_f_in}
-    else:
-        f_in = None
+    f_in = None
     tokens = Tokens.from_pytree(
         {**sample_params, **sample_obs},
         condition=list(sample_obs.keys()),
@@ -553,7 +550,7 @@ def run(
     opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
 
     # Training parameters
-    n_rounds = 5
+    n_rounds = 1
     n_samples_per_round = num_simulations // n_rounds
     n_val_samples = min(1000, num_simulations // 10)
     n_iter_per_round = 1000
@@ -650,7 +647,7 @@ def run(
 
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
-    trained_tfmpe, all_losses, proposals = tfmpe_fit_bottom_up(
+    trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
         tfmpe=tfmpe,
         y_obs=y_obs_dict,
         simulator_fn=simulator_fn,
@@ -671,39 +668,8 @@ def run(
         prior_log_prob=prior_log_prob,
     )
 
-    # from ...visualisation.hierarchical import (
-        # plot_hierarchical_posterior,
-        # generate_hierarchical_labels
-    # )
-    # from pathlib import Path
-
-    # for i, params_dict in enumerate(proposals):
-        # params_list = [
-            # params_dict[name].reshape(params_dict[name].shape[0], -1)
-            # for name, _ in slices
-        # ]
-        # params_flat = jnp.concatenate(params_list, axis=1)
-
-        # # Convert to torch and call task simulator
-        # params_torch = torch.from_numpy(np.array(params_flat)).float()
-
-        # if automatic_transforms_enabled:
-            # l_transforms = task._get_transforms(n_l=1)["parameters"]
-            # params_torch = l_transforms.inv(params_torch)
-
-        # plot_hierarchical_posterior(
-            # params_torch,
-            # generate_hierarchical_labels(task, 1),
-            # Path(f'proposal_{i}.png'),
-        # )
-
-    # Generate posterior samples using trained TFMPE
-    # Create context tokens from observation
-    y_f_in = None # TODO: this must be set for models with functional observations
-    
-
     # Create parameter tokens template for sampling
-    param_dict_template, param_f_in = prior_fn(rng, n=n_local, n_samples=1)
+    param_dict_template = prior_fn(rng, n_local, 1, None)
     param_dict_samples = {
         key: jnp.tile(value, (num_samples,) + (1,) * (value.ndim - 1))
         for key, value in param_dict_template.items()
@@ -717,20 +683,7 @@ def run(
         y_obs_dict
     )
 
-    sample_param_f_in = jax.tree.map(
-        lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
-        param_f_in
-    )
-
-    sample_y_f_in = jax.tree.map(
-        lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
-        y_f_in
-    )
-
-    if sample_y_f_in is not None:
-        f_in = {**sample_y_f_in, **sample_param_f_in}
-    else:
-        f_in = None
+    f_in = None
 
     tokens, decoder = Tokens.from_pytree(
         {
@@ -775,14 +728,8 @@ def run(
         n_local=n_local,
         transforms=transforms if automatic_transforms_enabled else None,
         context=y_obs_dict,
-        params_f_in=jax.tree.map(
-            lambda leaf: jnp.broadcast_to(leaf[0:1], (num_samples,) + leaf.shape[1:]),
-            params_f_in
-        ),
-        context_f_in=jax.tree.map(
-            lambda leaf: jnp.broadcast_to(leaf, (num_samples,) + leaf.shape[1:]),
-            y_f_in
-        )
+        params_f_in=None,
+        context_f_in=None
     )
 
     # Compute log probability at true parameters
