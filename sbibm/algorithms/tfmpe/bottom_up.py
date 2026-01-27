@@ -240,7 +240,7 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
         prior_fn(rng, n, n_samples) -> dict of JAX arrays
     """
 
-    def prior_fn(rng, n, n_samples):
+    def prior_fn(rng, n, n_samples, f_in):
         """Sample from prior for n local groups.
 
         Args:
@@ -277,7 +277,7 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
                 component_params = component_params.reshape(n_samples, n, -1)
             param_dict[name] = component_params[..., None]
 
-        return param_dict, None
+        return param_dict
 
     return prior_fn
 
@@ -296,7 +296,7 @@ def make_simulator_fn(
         simulator_fn(rng, params_dict, n) -> dict with 'y' key
     """
 
-    def simulator_fn(rng, params_dict, n):
+    def simulator_fn(rng, params_dict, n, f_in):
         """Simulate observations for n local groups.
 
         Args:
@@ -331,7 +331,7 @@ def make_simulator_fn(
         )
         obs_dict = {"y": obs_jax}
 
-        return obs_dict, None
+        return obs_dict
 
     return simulator_fn
 
@@ -347,7 +347,7 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False, device='cpu'
     """
     prior_dist = task.prior_dist
 
-    def local_fn(rng, global_samples, n):
+    def local_fn(rng, global_samples, n, f_in):
         """Sample local parameters conditioned on global.
 
         Args:
@@ -421,7 +421,7 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False, device='cpu'
                 reshaped_jax = jnp.asarray(reshaped[..., None].cpu())
                 local_params_dict[name] = reshaped_jax
 
-        return local_params_dict, None
+        return local_params_dict
 
     return local_fn
 
