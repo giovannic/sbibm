@@ -90,6 +90,76 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
     return results
 
 
+def load_n_l_scaling_results(input_dir: Path, n_l_values: Optional[list[int]] = None) -> dict:
+    """Load n_l scaling benchmark results for all hierarchical tasks.
+
+    Args:
+        input_dir: Directory containing n_l scaling CSV files
+        n_l_values: Optional list of n_l values to include (None = all)
+
+    Returns:
+        Dict mapping task_name -> DataFrame with all results
+    """
+    log = logging.getLogger(__name__)
+
+    pattern = "hierarchical_*.csv"
+    csv_files = list(input_dir.glob(pattern))
+
+    if not csv_files:
+        raise ValueError(
+            f"No CSV files found matching pattern '{pattern}' in {input_dir}"
+        )
+
+    log.info(f"Found {len(csv_files)} n_l scaling result files")
+
+    results = {}
+    for csv_file in csv_files:
+        log.debug(f"Loading {csv_file.name}")
+        df = pd.read_csv(csv_file)
+
+        # Verify n_l column exists
+        if "n_l" not in df.columns:
+            log.warning(f"Skipping {csv_file.name}: missing 'n_l' column")
+            continue
+
+        # Filter by n_l values if specified
+        if n_l_values is not None:
+            df = df[df["n_l"].isin(n_l_values)]
+            if len(df) == 0:
+                continue
+
+        # Extract task name from 'task' column
+        if len(df) > 0 and "task" in df.columns:
+            task_name = df["task"].iloc[0]
+
+            if task_name not in results:
+                results[task_name] = []
+            results[task_name].append(df)
+
+    # Concatenate all DataFrames per task
+    for task_name in sorted(results.keys()):
+        results[task_name] = pd.concat(results[task_name], ignore_index=True)
+        df = results[task_name]
+        log.info(f"Loaded {len(df)} n_l configurations for '{task_name}'")
+
+        # Apply scaling based on algorithm using the n_l column
+        snpe_mask = df["algorithm"] == "snpe"
+        deepset_mask = df["algorithm"] == "deepset"
+
+        if snpe_mask.any():
+            # SNPE: scale by n_l
+            df.loc[snpe_mask, "num_simulations"] *= df.loc[snpe_mask, "n_l"].astype(int)
+            log.info("  Scaled SNPE num_simulations by n_l")
+
+        if deepset_mask.any():
+            # DeepSet: scale by (n_l + 1) // 2
+            deepset_scale = (df.loc[deepset_mask, "n_l"].astype(int) + 1) // 2
+            df.loc[deepset_mask, "num_simulations"] *= deepset_scale
+            log.info("  Scaled DeepSet num_simulations by (n_l + 1) // 2")
+
+    return results
+
+
 def compute_statistics(values: pd.Series) -> tuple[float, float, float]:
     """Compute mean and 95% confidence interval.
 
@@ -147,7 +217,7 @@ def determine_bold_direction(metric: str) -> str:
 def format_cell(
     mean: float, lower_ci: float, upper_ci: float, is_best: bool = False
 ) -> str:
-    """Format a table cell with mean and confidence interval.
+    """Format a table cell with mean and confidence interval in floating point notation.
 
     Args:
         mean: Mean value
@@ -160,10 +230,10 @@ def format_cell(
     """
     # For single runs (where CI equals mean), just show the mean
     if lower_ci == mean and upper_ci == mean:
-        cell_text = f"{mean:.3f}"
+        cell_text = f"{mean:.2e}"
     else:
-        # Format with 3 decimal places
-        cell_text = f"{mean:.3f} [{lower_ci:.3f}, {upper_ci:.3f}]"
+        # Format with floating point notation
+        cell_text = f"{mean:.2e} [{lower_ci:.2e}, {upper_ci:.2e}]"
 
     # Apply bold if this is the best result
     if is_best:
@@ -206,6 +276,8 @@ def generate_latex_table(
     budgets: Optional[list[int]] = None,
     caption: Optional[str] = None,
     label: Optional[str] = None,
+    x_column: str = "num_simulations",
+    x_label: Optional[str] = None,
 ) -> str:
     """Generate LaTeX table from benchmark results.
 
@@ -217,6 +289,8 @@ def generate_latex_table(
         budgets: List of simulation budgets to include (None = all)
         caption: Custom caption (None = auto-generate)
         label: Custom LaTeX label (None = auto-generate)
+        x_column: Column to use for row indexing (default: "num_simulations")
+        x_label: Custom label for first column header (None = auto-generate from x_column)
 
     Returns:
         Complete LaTeX table as string
@@ -227,32 +301,33 @@ def generate_latex_table(
     bold_direction = determine_bold_direction(metric)
     log.info(f"Metric '{metric}': boldface direction = {bold_direction}")
 
-    # Extract unique tasks, algorithms, budgets
+    # Extract unique tasks, algorithms, x_values
     all_tasks = sorted(results.keys())
     if tasks:
         all_tasks = [t for t in all_tasks if t in tasks]
 
     all_algorithms = set()
-    all_budgets = set()
+    all_x_values = set()
     for task_name in all_tasks:
         df = results[task_name]
         all_algorithms.update(df["algorithm"].unique())
-        all_budgets.update(df["num_simulations"].unique())
+        all_x_values.update(df[x_column].unique())
 
-    # Filter algorithms and budgets
+    # Filter algorithms
     if algorithms:
         all_algorithms = [a for a in sorted(all_algorithms) if a in algorithms]
     else:
         all_algorithms = sorted(all_algorithms)
 
+    # Filter x_values (budgets parameter for backwards compatibility)
     if budgets:
-        all_budgets = [b for b in sorted(all_budgets) if b in budgets]
+        all_x_values = [x for x in sorted(all_x_values) if x in budgets]
     else:
-        all_budgets = sorted(all_budgets)
+        all_x_values = sorted(all_x_values)
 
     log.info(f"Tasks: {all_tasks}")
     log.info(f"Algorithms: {all_algorithms}")
-    log.info(f"Budgets: {all_budgets}")
+    log.info(f"{x_column} values: {all_x_values}")
 
     # Build LaTeX table
     lines = []
@@ -284,7 +359,10 @@ def generate_latex_table(
 
     # Header row
     lines.append("\\toprule")
-    header_parts = ["n\\_simulations"] + [
+    # Generate header label from x_column if not provided
+    if x_label is None:
+        x_label = escape_latex(x_column.replace("_", "\\_"))
+    header_parts = [x_label] + [
         escape_latex(algo.upper()) for algo in all_algorithms
     ]
     lines.append(" & ".join(header_parts) + " \\\\")
@@ -299,17 +377,22 @@ def generate_latex_table(
         lines.append(f"\\multicolumn{{{n_cols + 1}}}{{l}}{{\\textbf{{{task_display}}}}} \\\\")
         lines.append("\\midrule")
 
-        # Process each budget
-        for budget in all_budgets:
-            row_parts = [format_number(budget)]
+        # Process each x_value (budget or n_l)
+        for x_value in all_x_values:
+            # Format row label: use comma formatting for large numbers, plain for small
+            if x_column == "num_simulations":
+                row_label = format_number(int(x_value))
+            else:
+                row_label = str(int(x_value))
+            row_parts = [row_label]
 
             # Compute statistics for each algorithm
             algo_stats = {}
             for algo in all_algorithms:
-                # Filter data for this task, algorithm, and budget
+                # Filter data for this task, algorithm, and x_value
                 mask = (
                     (df["algorithm"] == algo)
-                    & (df["num_simulations"] == budget)
+                    & (df[x_column] == x_value)
                     & (df[metric].notna())
                 )
                 values = df[mask][metric]
@@ -320,7 +403,7 @@ def generate_latex_table(
                 else:
                     algo_stats[algo] = None
 
-            # Determine best algorithm for this budget
+            # Determine best algorithm for this x_value
             valid_algos = {k: v for k, v in algo_stats.items() if v is not None}
             if valid_algos:
                 if bold_direction == "min":
@@ -420,6 +503,18 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--n_l_mode",
+        action="store_true",
+        help="Enable n_l scaling mode (uses n_l as row index)",
+    )
+    parser.add_argument(
+        "--n_l_values",
+        type=int,
+        nargs="+",
+        default=None,
+        help="List of n_l values to include (default: all)",
+    )
 
     args = parser.parse_args()
 
@@ -433,7 +528,12 @@ def main():
     log.info(f"Input directory: {args.input_dir}")
     log.info(f"Metric: {args.metric}")
     log.info(f"Output path: {args.output_path}")
-    log.info(f"n_l scaling factor: {args.n_l}")
+    if args.n_l_mode:
+        log.info("Mode: n_l scaling")
+        if args.n_l_values:
+            log.info(f"n_l values filter: {args.n_l_values}")
+    else:
+        log.info(f"n_l scaling factor: {args.n_l}")
     log.info("=" * 80)
 
     # Validate output path
@@ -441,8 +541,18 @@ def main():
     if output_path.suffix.lower() != ".tex":
         raise ValueError(f"Output path must end with .tex, got: {output_path.suffix}")
 
-    # Load all results
-    results = load_all_results(input_dir=Path(args.input_dir), n_l=args.n_l)
+    # Load results based on mode
+    if args.n_l_mode:
+        results = load_n_l_scaling_results(
+            input_dir=Path(args.input_dir),
+            n_l_values=args.n_l_values,
+        )
+        x_column = "n_l"
+        x_label = "$n_\\ell$"
+    else:
+        results = load_all_results(input_dir=Path(args.input_dir), n_l=args.n_l)
+        x_column = "num_simulations"
+        x_label = "n\\_simulations"
 
     # Print summary statistics
     log.info("\nSummary Statistics:")
@@ -450,6 +560,8 @@ def main():
     for task_name, df in results.items():
         log.info(f"  {task_name}:")
         log.info(f"    Algorithms: {df['algorithm'].unique().tolist()}")
+        if args.n_l_mode:
+            log.info(f"    n_l values: {sorted(df['n_l'].unique().tolist())}")
         log.info(
             f"    Simulation budgets: "
             f"{sorted(df['num_simulations'].unique().tolist())}"
@@ -458,14 +570,26 @@ def main():
 
     # Generate LaTeX table
     log.info("\nGenerating LaTeX table...")
+
+    # Adjust caption and label for n_l mode
+    caption = args.caption
+    label = args.label
+    if args.n_l_mode:
+        if caption is None:
+            caption = f"n\\_l scaling results for metric: {escape_latex(args.metric)}"
+        if label is None:
+            label = f"table:n_l_scaling_{args.metric}"
+
     latex_table = generate_latex_table(
         results=results,
         metric=args.metric,
         tasks=args.tasks,
         algorithms=args.algorithms,
         budgets=args.budgets,
-        caption=args.caption,
-        label=args.label,
+        caption=caption,
+        label=label,
+        x_column=x_column,
+        x_label=x_label,
     )
 
     # Create output directory if needed
