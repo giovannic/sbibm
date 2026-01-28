@@ -370,7 +370,7 @@ def create_grid_plot(
                     metric=metric,
                     algorithms=algorithms,
                     algo_colors=algo_colors,
-                    x_column="num_observation",
+                    x_column="n_l",
                     x_label=r"$n_s$",
                     show_title=False,
                     show_ylabel=(task_idx == 0),
