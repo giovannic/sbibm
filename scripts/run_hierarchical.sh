@@ -32,7 +32,6 @@ TASKS=(
   "hierarchical_gaussian_linear"
   "hierarchical_gaussian_linear_uniform"
   "hierarchical_gaussian_mixture"
-  "hierarchical_lotka_volterra"
   "hierarchical_sir"
   "hierarchical_slcp"
   "hierarchical_two_moons"
@@ -62,9 +61,9 @@ fi
 
 echo "Running benchmarks with device: $DEVICE"
 
-for ALGORITHM in "${ALGORITHMS[@]}"; do
-  for TASK in "${TASKS[@]}"; do
-    for OBS in $(seq 1 $NUM_OBSERVATIONS); do
+for OBS in $(seq 3 $NUM_OBSERVATIONS); do
+  for ALGORITHM in "${ALGORITHMS[@]}"; do
+    for TASK in "${TASKS[@]}"; do
       echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM, observation: $OBS"
       python scripts/run_hierarchical_benchmark.py \
         --task "$TASK" \

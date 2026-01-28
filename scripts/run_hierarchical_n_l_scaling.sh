@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # n_l values to benchmark
-N_L_VALUES=(1 2 5 10 20 50 100)
+N_L_VALUES=(1 10 20 50 100)
 
 # Loop through all hierarchical tasks except bernoulli_glm
 TASKS=(
@@ -68,7 +68,7 @@ for N_L in "${N_L_VALUES[@]}"; do
         python scripts/run_hierarchical_benchmark.py \
           --task "$TASK" \
           --algorithm "$ALGORITHM" \
-          --num_simulations 10000 \
+          --num_simulations 5000 \
           --num_observation "$OBS" \
           --output_dir test_results_n_l_scaling \
           --device "$DEVICE" \
