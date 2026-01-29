@@ -370,6 +370,16 @@ def main():
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--mlp",
+        action="store_true",
+        help="MLP for ablation",
+    )
+    parser.add_argument(
+        "--fit_directly",
+        action="store_true",
+        help="fit_directly for ablation",
+    )
 
     args = parser.parse_args()
 
@@ -407,7 +417,9 @@ def main():
         ),
         num_rounds=args.num_rounds,
         device=args.device,
-        automatic_transforms_enabled=True
+        automatic_transforms_enabled=True,
+        mlp=args.mlp,
+        fit_directly=args.fit_directly
     )
 
     # Save results

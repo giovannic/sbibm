@@ -13,8 +13,9 @@ import optax
 import torch
 from flax import nnx
 from tfmpe.estimators.tfmpe import TFMPE, NormalDistribution
-from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up
+from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up, fit_directly as tfmpe_fit_directly
 from tfmpe.nn.transformer import Transformer, TransformerConfig
+from tfmpe.nn.mlp import MLP
 from tfmpe.preprocessing.tokens import Tokens
 from tfmpe.preprocessing.utils import Independence, Labeller
 
@@ -531,23 +532,62 @@ def run(
         params=jax.random.PRNGKey(0),
         dropout=jax.random.PRNGKey(1),
     )
-    transformer = Transformer(
-        config=config,
-        tokens=tokens,
-        rngs=rngs,
-    )
+    if not kwargs.get('mlp', False):
+        local_estimator = Transformer(
+            config=config,
+            tokens=tokens,
+            rngs=rngs,
+        )
+        global_estimator = Transformer(
+            config=config,
+            tokens=tokens,
+            rngs=rngs,
+        )
+    else:
+        local_sample_params = prior_fn(
+            key, 1, 10, None
+        )
+        local_sample_obs = simulator_fn(
+            key, local_sample_params, 1, None
+        )
+        local_tokens = Tokens.from_pytree(
+            {**local_sample_params, **local_sample_obs},
+            condition=list(local_sample_params.keys()),
+            sample_ndims=1,
+            labeller=labeller,
+            independence=independence,
+            functional_inputs=f_in
+        )
+        local_estimator = MLP(
+            n_ff=config.n_ff,
+            latent_dim=config.latent_dim,
+            tokens=local_tokens,
+            rngs=rngs,
+        )
+        global_estimator = MLP(
+            n_ff=config.n_ff,
+            latent_dim=config.latent_dim,
+            tokens=tokens,
+            rngs=rngs,
+        )
 
     base_dist = NormalDistribution(rngs=rngs)
 
-    tfmpe = TFMPE(
-        vf_network=transformer,
+    tfmpe_local = TFMPE(
+        vf_network=local_estimator,
+        base_dist=base_dist,
+        solver=diffrax.Dopri5(),
+    )
+    tfmpe_global = TFMPE(
+        vf_network=global_estimator,
         base_dist=base_dist,
         solver=diffrax.Dopri5(),
     )
 
     # Setup optimizer
     optimizer = optax.adam(learning_rate=1e-4)
-    opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
+    local_opt = nnx.Optimizer(tfmpe_local, optimizer, wrt=nnx.Param)
+    global_opt = nnx.Optimizer(tfmpe_global, optimizer, wrt=nnx.Param)
 
     # Training parameters
     n_rounds = 1
@@ -647,26 +687,46 @@ def run(
 
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
-    trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
-        tfmpe=tfmpe,
-        y_obs=y_obs_dict,
-        simulator_fn=simulator_fn,
-        prior_fn=prior_fn,
-        local_fn=local_fn,
-        global_names=global_names,
-        n_groups=n_local,
-        n_rounds=n_rounds,
-        n_samples_per_round=n_samples_per_round,
-        n_val_samples=n_val_samples,
-        opt=opt,
-        n_iter_per_round=n_iter_per_round,
-        batch_size=batch_size,
-        rng=rng,
-        independence=independence,
-        labeller=labeller,
-        prob_transform=prob_transform,
-        prior_log_prob=prior_log_prob,
-    )
+    if not kwargs.get('fit_directly', False):
+        trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
+            tfmpe_local=tfmpe_local,
+            tfmpe_global=tfmpe_global,
+            y_obs=y_obs_dict,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            local_fn=local_fn,
+            global_names=global_names,
+            n_groups=n_local,
+            n_rounds=n_rounds,
+            n_samples_per_round=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            local_opt=local_opt,
+            global_opt=global_opt,
+            n_iter_per_round=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            independence=independence,
+            labeller=labeller,
+            prob_transform=prob_transform,
+            prior_log_prob=prior_log_prob,
+        )
+    else:
+        trained_tfmpe, all_losses = tfmpe_fit_directly(
+            tfmpe=tfmpe_global,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            n_groups=n_local,
+            n_samples_per_round=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            opt=global_opt,
+            n_iter_per_round=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            independence=independence,
+            labeller=labeller,
+            delta=1e-4,
+            patience=100
+        )
 
     # Create parameter tokens template for sampling
     param_dict_template = prior_fn(rng, n_local, 1, None)

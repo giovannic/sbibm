@@ -73,7 +73,7 @@ def lc2st(
     theta_q = posterior.sample((num_calibration_samples,), x=xs)
 
     n_layers = 1
-    latent_dim = 16
+    latent_dim = 32
     key = jr.PRNGKey(0)
     rngs = nnx.Rngs(0)
 
