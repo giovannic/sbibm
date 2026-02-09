@@ -371,14 +371,10 @@ def main():
         help="Enable verbose logging",
     )
     parser.add_argument(
-        "--mlp",
-        action="store_true",
-        help="MLP for ablation",
-    )
-    parser.add_argument(
-        "--fit_directly",
-        action="store_true",
-        help="fit_directly for ablation",
+        "--ablation",
+        choices=['none', 'mlp', 'joint', 'linear', 'sequential', 'direct'],
+        default='none',
+        help="Ablation experiment",
     )
 
     args = parser.parse_args()
@@ -418,16 +414,20 @@ def main():
         num_rounds=args.num_rounds,
         device=args.device,
         automatic_transforms_enabled=True,
-        mlp=args.mlp,
-        fit_directly=args.fit_directly
+        ablation=args.ablation,
     )
+
+    if args.ablation != 'none':
+        algo_name = f'{args.algorithm}_{args.ablation}'
+    else:
+        algo_name = args.algorithm
 
     # Save results
     save_results(
         results=results,
         output_dir=Path(args.output_dir),
         task_name=args.task,
-        algorithm=args.algorithm,
+        algorithm=algo_name,
     )
 
     log.info("=" * 80)

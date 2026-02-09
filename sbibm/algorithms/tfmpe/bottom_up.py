@@ -17,7 +17,7 @@ from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up, fit_
 from tfmpe.nn.transformer import Transformer, TransformerConfig
 from tfmpe.nn.mlp import MLP
 from tfmpe.preprocessing.tokens import Tokens
-from tfmpe.preprocessing.utils import Independence, Labeller
+from tfmpe.preprocessing.utils import Labeller
 
 from sbibm.algorithms.sbi.utils import wrap_prior_dist
 from sbibm.tasks import Task
@@ -36,7 +36,6 @@ class TFMPEPosterior:
         self,
         tfmpe_model,
         labeller,
-        independence,
         slices,
         global_names,
         local_names,
@@ -51,7 +50,6 @@ class TFMPEPosterior:
         Args:
             tfmpe_model: Trained TFMPE model
             labeller: Labeller for token creation
-            independence: Independence structure for tokens
             slices: List of (name, (start, end)) tuples for parameter
                 slicing
             global_names: Names of global parameters
@@ -64,7 +62,6 @@ class TFMPEPosterior:
         """
         self.tfmpe_model = tfmpe_model
         self.labeller = labeller
-        self.independence = independence
         self.slices = slices
         self.global_names = global_names
         self.local_names = local_names
@@ -127,14 +124,12 @@ class TFMPEPosterior:
         else:
             f_in = None
 
-        tokens, decoder = Tokens.from_pytree(
+        tokens, decoder = Tokens.from_pytree_with_decoder(
             {**param_dict_samples, **context},
             condition=list(context.keys()),
             sample_ndims=1,
             labeller=self.labeller,
-            independence=self.independence,
             functional_inputs=f_in,
-            return_decoder=True
         )
             
         posterior_tokens = self.tfmpe_model.sample_posterior(
@@ -458,7 +453,7 @@ def run(
             methods
     """
     device = kwargs.get('device', 'cpu')
-    start_time = time.time()
+    ablation = kwargs.get('ablation', 'none')
 
     # Load observation
     y_obs_torch = task.get_observation(num_observation=num_observation)
@@ -502,12 +497,8 @@ def run(
         key, sample_params, n_local, None
     )
 
-    # Create labeller and independence structure
+    # Create labeller
     labeller = Labeller.for_keys(all_param_names)
-
-    # Define independence: each local param[i] attends
-    # only to y[i]
-    independence = Independence()
 
     # Create tokens from sample data
     f_in = None
@@ -516,84 +507,110 @@ def run(
         condition=list(sample_obs.keys()),
         sample_ndims=1,
         labeller=labeller,
-        independence=independence,
         functional_inputs=f_in
     )
 
     # Initialize TFMPE model
-    config = TransformerConfig(
-        latent_dim=64,
-        n_encoder=1,
-        n_heads=2,
-        n_ff=2,
-    )
+    if ablation == 'linear':
+        config = TransformerConfig(
+            latent_dim=64,
+            n_encoder=1,
+            n_heads=2,
+            n_ff=2,
+        )
+    else:
+        config = TransformerConfig(
+            latent_dim=64,
+            n_encoder=1,
+            n_heads=2,
+            n_ff=2,
+            attention='linear'
+        )
 
     rngs = nnx.Rngs(
         params=jax.random.PRNGKey(0),
         dropout=jax.random.PRNGKey(1),
     )
-    if not kwargs.get('mlp', False):
-        local_estimator = Transformer(
-            config=config,
-            tokens=tokens,
-            rngs=rngs,
-        )
-        global_estimator = Transformer(
-            config=config,
-            tokens=tokens,
-            rngs=rngs,
-        )
-    else:
-        local_sample_params = prior_fn(
-            key, 1, 10, None
-        )
-        local_sample_obs = simulator_fn(
-            key, local_sample_params, 1, None
-        )
-        local_tokens = Tokens.from_pytree(
-            {**local_sample_params, **local_sample_obs},
-            condition=list(local_sample_params.keys()),
-            sample_ndims=1,
-            labeller=labeller,
-            independence=independence,
-            functional_inputs=f_in
-        )
-        local_estimator = MLP(
-            n_ff=config.n_ff,
-            latent_dim=config.latent_dim,
-            tokens=local_tokens,
-            rngs=rngs,
-        )
-        global_estimator = MLP(
-            n_ff=config.n_ff,
-            latent_dim=config.latent_dim,
-            tokens=tokens,
-            rngs=rngs,
-        )
-
     base_dist = NormalDistribution(rngs=rngs)
 
-    tfmpe_local = TFMPE(
-        vf_network=local_estimator,
-        base_dist=base_dist,
-        solver=diffrax.Dopri5(),
-    )
-    tfmpe_global = TFMPE(
-        vf_network=global_estimator,
-        base_dist=base_dist,
-        solver=diffrax.Dopri5(),
-    )
+    if ablation == 'joint' or ablation == 'direct':
+        estimator = Transformer(
+            config=config,
+            tokens=tokens,
+            rngs=rngs,
+        )
+        tfmpe = TFMPE(
+            vf_network=estimator,
+            base_dist=base_dist,
+            solver=diffrax.Dopri5(),
+        )
+        optimizer = optax.adam(learning_rate=1e-4)
+        opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
+    else:
+        if ablation != 'mlp':
+            local_estimator = Transformer(
+                config=config,
+                tokens=tokens,
+                rngs=rngs,
+            )
+            global_estimator = Transformer(
+                config=config,
+                tokens=tokens,
+                rngs=rngs,
+            )
+            estimator = [local_estimator, global_estimator]
+        else:
+            local_sample_params = prior_fn(
+                key, 1, 10, None
+            )
+            local_sample_obs = simulator_fn(
+                key, local_sample_params, 1, None
+            )
+            local_tokens = Tokens.from_pytree(
+                {**local_sample_params, **local_sample_obs},
+                condition=list(local_sample_params.keys()),
+                sample_ndims=1,
+                labeller=labeller,
+                functional_inputs=f_in
+            )
+            local_estimator = MLP(
+                n_ff=config.n_ff,
+                latent_dim=config.latent_dim,
+                tokens=local_tokens,
+                rngs=rngs,
+            )
+            global_estimator = MLP(
+                n_ff=config.n_ff,
+                latent_dim=config.latent_dim,
+                tokens=tokens,
+                rngs=rngs,
+            )
 
-    # Setup optimizer
-    optimizer = optax.adam(learning_rate=1e-4)
-    local_opt = nnx.Optimizer(tfmpe_local, optimizer, wrt=nnx.Param)
-    global_opt = nnx.Optimizer(tfmpe_global, optimizer, wrt=nnx.Param)
+        tfmpe_local = TFMPE(
+            vf_network=local_estimator,
+            base_dist=base_dist,
+            solver=diffrax.Dopri5(),
+        )
+        tfmpe_global = TFMPE(
+            vf_network=global_estimator,
+            base_dist=base_dist,
+            solver=diffrax.Dopri5(),
+        )
+        tfmpe = [tfmpe_local, tfmpe_global]
+        local_optimizer = optax.adam(learning_rate=1e-4)
+        local_opt = nnx.Optimizer(tfmpe_local, local_optimizer, wrt=nnx.Param)
+        global_optimizer = optax.adam(learning_rate=1e-4)
+        global_opt = nnx.Optimizer(tfmpe_global, global_optimizer, wrt=nnx.Param)
+        opt = [local_opt, global_opt]
 
     # Training parameters
-    n_rounds = 1
+    if ablation == 'sequential':
+        n_rounds = 5
+    else:
+        n_rounds = 1
     n_samples_per_round = num_simulations // n_rounds
     n_val_samples = min(1000, num_simulations // 10)
-    n_iter_per_round = 1000
+    n_iter_per_round = 200
     batch_size = 100
 
     # Get transforms
@@ -621,43 +638,6 @@ def run(
                 unconstrained
             )
             return log_prob + jnp.array(delta)
-
-        def forward(params_dict: dict) -> dict:
-            params_list = []
-            for name, (start, end) in slices:
-                # Extract component from dict and reshape correctly
-                # The slice (start, end) tells us how many dimensions this
-                # component should have in the flat representation
-                component = params_dict[name]
-                # Reshape to (num_samples, -1) to flatten all dimensions
-                # except the first (sample) dimension
-                component_flat = component.reshape(component.shape[0], -1)
-                params_list.append(component_flat)
-
-            flattened = jnp.concatenate(params_list, axis=1)
-            unconstrained = torch.from_numpy(np.array(flattened)).float()
-            constrained = transforms(unconstrained)
-
-            # Convert to JAX arrays
-            samples_jax = jnp.asarray(constrained)
-
-            # Create structured dict for TFMPE
-            new_param_dict = {}
-
-            # Add global parameters, grouped by component
-            for name, (start, end) in slices:
-                # Extract this component's parameters
-                component_params = samples_jax[:, start:end]
-                # Add batch dimension for TFMPE format
-                if str.startswith(name, "p_l_"):
-                    component_params = component_params.reshape(
-                        component_params.shape[0],
-                        n_local,
-                        -1
-                    )
-                new_param_dict[name] = component_params[..., None]
-
-            return new_param_dict
     else:
         prob_transform = None
 
@@ -687,10 +667,9 @@ def run(
 
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
-    if not kwargs.get('fit_directly', False):
+    if ablation != 'direct':
         trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
-            tfmpe_local=tfmpe_local,
-            tfmpe_global=tfmpe_global,
+            tfmpe=tfmpe,
             y_obs=y_obs_dict,
             simulator_fn=simulator_fn,
             prior_fn=prior_fn,
@@ -700,29 +679,26 @@ def run(
             n_rounds=n_rounds,
             n_samples_per_round=n_samples_per_round,
             n_val_samples=n_val_samples,
-            local_opt=local_opt,
-            global_opt=global_opt,
+            opt=opt,
             n_iter_per_round=n_iter_per_round,
             batch_size=batch_size,
             rng=rng,
-            independence=independence,
             labeller=labeller,
             prob_transform=prob_transform,
             prior_log_prob=prior_log_prob,
         )
     else:
         trained_tfmpe, all_losses = tfmpe_fit_directly(
-            tfmpe=tfmpe_global,
+            tfmpe=tfmpe,
             simulator_fn=simulator_fn,
             prior_fn=prior_fn,
             n_groups=n_local,
             n_samples_per_round=n_samples_per_round,
             n_val_samples=n_val_samples,
-            opt=global_opt,
+            opt=opt,
             n_iter_per_round=n_iter_per_round,
             batch_size=batch_size,
             rng=rng,
-            independence=independence,
             labeller=labeller,
             delta=1e-4,
             patience=100
@@ -745,7 +721,7 @@ def run(
 
     f_in = None
 
-    tokens, decoder = Tokens.from_pytree(
+    tokens, decoder = Tokens.from_pytree_with_decoder(
         {
             **y_obs_sample,
             **param_dict_samples
@@ -754,7 +730,6 @@ def run(
         sample_ndims=1,
         labeller=labeller,
         functional_inputs=f_in,
-        return_decoder=True
     )
 
     # Sample from posterior
@@ -781,7 +756,6 @@ def run(
     posterior_wrapped = TFMPEPosterior(
         tfmpe_model=trained_tfmpe,
         labeller=labeller,
-        independence=independence,
         slices=slices,
         global_names=global_names,
         local_names=local_names,
@@ -798,6 +772,9 @@ def run(
     )
     log_prob_true_params = posterior_wrapped.log_prob(true_parameters)
 
-    return posterior_samples, num_simulations, log_prob_true_params, (
+    return (
+        posterior_samples,
+        num_simulations,
+        log_prob_true_params,
         posterior_wrapped
     )

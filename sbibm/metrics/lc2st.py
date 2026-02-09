@@ -5,14 +5,8 @@ from sbibm.tasks.task import Task
 
 import torch
 
-from sfmpe.metrics.lc2st import (
-    BinaryMLPClassifier,
-    MultiBinaryMLPClassifier,
-    train_lc2st_classifiers,
-    evaluate_lc2st
-)
+from tfmpe.metrics.lc2st import run_lc2st
 
-from flax import nnx
 from jax import random as jr
 from jax import numpy as jnp
 
@@ -72,58 +66,30 @@ def lc2st(
     # Sample from posterior conditioned on observation
     theta_q = posterior.sample((num_calibration_samples,), x=xs)
 
-    n_layers = 1
-    latent_dim = 32
     key = jr.PRNGKey(0)
-    rngs = nnx.Rngs(0)
 
-    main = BinaryMLPClassifier(
-        dim=xs.shape[1] + thetas.shape[1],
-        latent_dim = latent_dim,
-        n_layers=n_layers,
-        activation=nnx.relu,
-        rngs=rngs,
-    )
-
-    null_classifier = MultiBinaryMLPClassifier(
-        dim=xs.shape[1] + thetas.shape[1],
-        latent_dim=latent_dim,
-        n_layers=n_layers,
-        activation=nnx.relu,
-        n=num_trials,
-        rngs=rngs,
-    )
-
-    train_key, key = jr.split(key)
     d_cal = (
         jnp.array(xs),
         jnp.array(thetas),
         jnp.array(theta_q)
     )
 
-
-    print('Training LC2ST classifiers')
-    train_lc2st_classifiers(
-        train_key,
+    response = run_lc2st(
+        key,
         d_cal,
-        main,
-        null_classifier,
-        n_epochs
-    )
-
-    print('Evaluating LC2ST statistics')
-    null_stats, main_stat, p_value = evaluate_lc2st(
         jnp.array(observation)[0],
         jnp.array(posterior_samples),
-        main,
-        null_classifier,
+        latent_dim = 32,
+        n_layers = 2,
+        num_folds = 10,
+        num_ensemble = 10,
+        num_null = num_trials,
+        n_epochs = n_epochs,
     )
-
-    critical_value = jnp.quantile(null_stats, 1 - alpha)
-
+    critical_value = response.critical_value(alpha)
     return {
-        "p_value": p_value,
-        "test_statistic": main_stat,
+        "p_value": response.pvalue,
+        "test_statistic": response.main_stat,
         "critical_value": critical_value,
-        "reject": main_stat > critical_value,
+        "reject": response.main_stat > critical_value,
     }
