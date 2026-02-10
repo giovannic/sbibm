@@ -49,6 +49,13 @@ TASKS=(
   "hierarchical_two_moons"
 )
 
+ABLATIONS=(
+  "none"
+  "joint"
+  "mlp"
+  "direct"
+)
+
 echo "Device: $DEVICE"
 echo "n_l (local contexts): $N_L"
 echo "Observations: $START_OBS to $END_OBS"
@@ -69,48 +76,47 @@ echo ""
 
 echo "Running ablation study with device: $DEVICE"
 
-for TASK in "${TASKS[@]}"; do
-  for OBS in $(seq $START_OBS $END_OBS); do
-    # Run baseline (no extra flags)
-    echo "Running baseline for task: $TASK, observation: $OBS"
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "bottom_up" \
-      --num_simulations 10000 \
-      --num_observation "$OBS" \
-      --output_dir results \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000
+for OBS in $(seq $START_OBS $END_OBS); do
+  for ABLATION in "${ABLATIONS[@]}"; do
+    for TASK in "${TASKS[@]}"; do
+      # Run baseline (no extra flags)
+      echo "Running task: $TASK, observation: $OBS, ablation: $ABLATION"
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "bottom_up" \
+        --num_simulations 1000 \
+        --num_observation "$OBS" \
+        --output_dir results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
+        --ablation "$ABLATION"
 
-    # Run with --mlp flag
-    echo "Running with --mlp for task: $TASK, observation: $OBS"
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "bottom_up" \
-      --num_simulations 10000 \
-      --num_observation "$OBS" \
-      --output_dir results_mlp \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000 \
-      --mlp
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "bottom_up" \
+        --num_simulations 5000 \
+        --num_observation "$OBS" \
+        --output_dir results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
+        --ablation "$ABLATION"
 
-    # Run with --fit_directly flag
-    echo "Running with --fit_directly for task: $TASK, observation: $OBS"
-    python scripts/run_hierarchical_benchmark.py \
-      --task "$TASK" \
-      --algorithm "bottom_up" \
-      --num_simulations 10000 \
-      --num_observation "$OBS" \
-      --output_dir results_fit_directly \
-      --device "$DEVICE" \
-      --n_l "$N_L" \
-      --seed 42 \
-      --num_samples 1000 \
-      --fit_directly
+      python scripts/run_hierarchical_benchmark.py \
+        --task "$TASK" \
+        --algorithm "bottom_up" \
+        --num_simulations 10000 \
+        --num_observation "$OBS" \
+        --output_dir results \
+        --device "$DEVICE" \
+        --n_l "$N_L" \
+        --seed 42 \
+        --num_samples 1000
+        --ablation "$ABLATION"
+    done
   done
 done
 
