@@ -1,6 +1,5 @@
 """TFMPE bottom-up algorithm for hierarchical inference on SBIBM tasks."""
 
-import time
 from math import prod
 from typing import List, Tuple
 
@@ -517,6 +516,7 @@ def run(
             n_encoder=1,
             n_heads=2,
             n_ff=2,
+            attention='linear'
         )
     else:
         config = TransformerConfig(
@@ -524,7 +524,6 @@ def run(
             n_encoder=1,
             n_heads=2,
             n_ff=2,
-            attention='linear'
         )
 
     rngs = nnx.Rngs(
@@ -610,7 +609,7 @@ def run(
         n_rounds = 1
     n_samples_per_round = num_simulations // n_rounds
     n_val_samples = min(1000, num_simulations // 10)
-    n_iter_per_round = 200
+    n_iter_per_round = 1000
     batch_size = 100
 
     # Get transforms
