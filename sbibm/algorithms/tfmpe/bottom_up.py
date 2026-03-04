@@ -131,8 +131,9 @@ class TFMPEPosterior:
             functional_inputs=f_in,
         )
             
-        posterior_tokens = self.tfmpe_model.sample_posterior(
-            tokens=tokens
+        posterior_tokens = self.tfmpe_model.sample_posterior_batched(
+            tokens=tokens,
+            batch_size=1000
         )
 
         # Convert tokens back to flat tensor format
@@ -513,16 +514,16 @@ def run(
     if ablation == 'linear':
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=1,
-            n_heads=2,
+            n_encoder=2,
+            n_heads=16,
             n_ff=2,
             attention='linear'
         )
     else:
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=1,
-            n_heads=2,
+            n_encoder=2,
+            n_heads=16,
             n_ff=2,
         )
 
@@ -607,8 +608,8 @@ def run(
         n_rounds = 5
     else:
         n_rounds = 1
-    n_samples_per_round = num_simulations // n_rounds
-    n_val_samples = min(1000, num_simulations // 10)
+    n_val_samples = num_simulations // 10
+    n_samples_per_round = num_simulations // n_rounds - n_val_samples
     n_iter_per_round = 1000
     batch_size = 100
 
@@ -699,7 +700,7 @@ def run(
             batch_size=batch_size,
             rng=rng,
             labeller=labeller,
-            delta=1e-4,
+            delta=1e-3,
             patience=100
         )
 

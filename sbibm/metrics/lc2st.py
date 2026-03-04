@@ -18,9 +18,9 @@ def lc2st(
     task: Task,
     num_observation: int,
     posterior_samples: torch.Tensor,
-    num_calibration_samples: int = 1000,
+    num_calibration_samples: int = 10000,
     num_trials: int = 100,
-    n_epochs: int = 100,
+    n_epochs: int = 1000,
     alpha: float = 0.05,
     **kwargs: Any,
 ) -> Dict[str, Any]:

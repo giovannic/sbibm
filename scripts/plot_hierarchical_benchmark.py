@@ -18,20 +18,9 @@ import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-import numpy as np
 import pandas as pd
-from scipy.stats import bootstrap
 
-
-def setup_logging(verbose: bool = False) -> None:
-    """Configure logging for the plotting script."""
-    level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+from plot_utils import plot_task_panel, setup_logging
 
 
 def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
@@ -157,116 +146,8 @@ def load_n_l_scaling_results(input_dir: Path) -> dict:
     return results
 
 
-def _plot_task_panel(
-    ax,
-    df: pd.DataFrame,
-    metric: str,
-    algorithms: list,
-    algo_colors: dict,
-    x_column: str,
-    x_label: str,
-    show_title: bool = False,
-    title: str = "",
-    show_ylabel: bool = False,
-    ylabel: str = "",
-    use_scientific_x: bool = True,
-    show_xlabel: bool = True,
-):
-    """Plot a single task panel with all algorithms overlaid.
-
-    Args:
-        ax: Matplotlib axes object
-        df: DataFrame with columns: algorithm, x_column, metric
-        metric: Name of the metric column to plot
-        algorithms: List of algorithm names to plot
-        algo_colors: Dict mapping algorithm name to color
-        x_column: Column name for x-axis values
-        x_label: Label for x-axis
-        show_title: Whether to show subplot title
-        title: Title text for subplot
-        show_ylabel: Whether to show y-axis label
-        ylabel: Label for y-axis
-        use_scientific_x: Whether to use scientific notation for x-axis ticks
-    """
-    for algorithm in algorithms:
-        # Filter data for this algorithm
-        algo_df = df[df["algorithm"] == algorithm]
-
-        if len(algo_df) == 0:
-            continue
-
-        # Group by x_column and compute bootstrap CIs
-        x_values = []
-        means = []
-        lower_errs = []
-        upper_errs = []
-
-        for x_val, group in algo_df.groupby(x_column):
-            data = group[metric].values
-            mean = np.mean(data)
-            x_values.append(x_val)
-            means.append(mean)
-
-            if len(data) > 1:
-                # Compute bootstrap 95% CI
-                res = bootstrap(
-                    (data,),
-                    np.mean,
-                    confidence_level=0.95,
-                    n_resamples=1000,
-                    random_state=42,
-                )
-                lower_errs.append(mean - res.confidence_interval.low)
-                upper_errs.append(res.confidence_interval.high - mean)
-            else:
-                # Single data point, no CI (consistent with previous std-based behavior)
-                lower_errs.append(np.nan)
-                upper_errs.append(np.nan)
-
-        # Get color for this algorithm
-        color = algo_colors[algorithm]
-
-        # Plot line with error bars
-        if algorithm == "snpe":
-            label = "NPE"
-        elif algorithm == "bottom_up":
-            label = "LF"
-        elif algorithm == "deepset":
-            label = "PF"
-        else:
-            label = algorithm.upper()
-        ax.errorbar(
-            x_values,
-            means,
-            yerr=[lower_errs, upper_errs],
-            marker="o",
-            color=color,
-            markersize=5,
-            linewidth=2,
-            capsize=3,
-            label=label,
-        )
-
-    # Formatting
-    if show_xlabel:
-        ax.set_xlabel(x_label, fontsize=9)
-    if show_ylabel:
-        ax.set_ylabel(ylabel, fontsize=9)
-    ax.grid(True, alpha=0.3)
-
-    # Set x-axis ticks to actual values
-    x_ticks = sorted(df[x_column].unique())
-    ax.set_xticks(x_ticks)
-    if use_scientific_x:
-        ax.xaxis.set_major_formatter(ticker.ScalarFormatter(useMathText=True))
-        ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))
-        ax.tick_params(axis="x", rotation=45, labelsize=8)
-    else:
-        ax.tick_params(axis="x", labelsize=8)
-    ax.tick_params(axis="y", labelsize=8)
-
-    if show_title:
-        ax.set_title(title, fontsize=10, fontweight="bold")
+# Label map for algorithm display names
+ALGO_LABEL_MAP = {"snpe": "NPE", "bottom_up": "LF", "deepset": "PF"}
 
 
 def create_grid_plot(
@@ -342,14 +223,16 @@ def create_grid_plot(
         title = task_name.replace("_", " ").title()
         title = title.replace("Sir", "SIR").replace("Slcp", "SLCP")
 
-        _plot_task_panel(
+        plot_task_panel(
             ax=ax,
             df=df,
             metric=metric,
-            algorithms=algorithms,
-            algo_colors=algo_colors,
+            groups=algorithms,
+            group_colors=algo_colors,
             x_column="num_simulations",
             x_label="Number of Simulations",
+            group_column="algorithm",
+            label_map=ALGO_LABEL_MAP,
             show_title=True,
             title=title,
             show_ylabel=(task_idx == 0),
@@ -364,14 +247,16 @@ def create_grid_plot(
 
             if task_name in n_l_results:
                 df = n_l_results[task_name]
-                _plot_task_panel(
+                plot_task_panel(
                     ax=ax,
                     df=df,
                     metric=metric,
-                    algorithms=algorithms,
-                    algo_colors=algo_colors,
+                    groups=algorithms,
+                    group_colors=algo_colors,
                     x_column="n_l",
                     x_label=r"$n_s$",
+                    group_column="algorithm",
+                    label_map=ALGO_LABEL_MAP,
                     show_title=False,
                     show_ylabel=(task_idx == 0),
                     ylabel=metric_label,
