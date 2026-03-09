@@ -12,7 +12,7 @@ import optax
 import torch
 from flax import nnx
 from tfmpe.estimators.tfmpe import TFMPE, NormalDistribution
-from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up, fit_directly as tfmpe_fit_directly
+from tfmpe.estimators.training import fit_bottom_up as tfmpe_fit_bottom_up, fit_directly as tfmpe_fit_directly, fit_pf as tfmpe_fit_pf
 from tfmpe.nn.transformer import Transformer, TransformerConfig
 from tfmpe.nn.mlp import MLP
 from tfmpe.preprocessing.tokens import Tokens
@@ -180,6 +180,158 @@ class TFMPEPosterior:
             None (log probability computation not supported due to JAX
             tracing constraints in stateful modules)
         """
+        return None
+
+
+class TFMPEPosteriorPF:
+    """Wrapper for factored TFMPE posterior (global + local models).
+
+    Samples from the posterior by first sampling global parameters from
+    the global model, then sampling local parameters from the local model
+    conditioned on the sampled globals and per-group observations.
+    """
+
+    def __init__(
+        self,
+        tfmpe_global,
+        tfmpe_local,
+        labeller,
+        slices,
+        global_names,
+        local_names,
+        n_local,
+        transforms=None,
+        context=None,
+    ):
+        self.tfmpe_global = tfmpe_global
+        self.tfmpe_local = tfmpe_local
+        self.labeller = labeller
+        self.slices = slices
+        self.global_names = global_names
+        self.local_names = local_names
+        self.n_local = n_local
+        self.transforms = transforms
+        self.context = context
+
+    def sample(self, shape, x=None):
+        num_samples = shape[0]
+
+        # Build global param templates
+        global_param_template = {}
+        for name, (start, end) in self.slices:
+            if name in self.global_names:
+                event_dim = end - start
+                global_param_template[name] = jnp.ones((1, event_dim, 1))
+        global_param_samples = {
+            key: jnp.tile(
+                value, (num_samples,) + (1,) * (value.ndim - 1)
+            )
+            for key, value in global_param_template.items()
+        }
+
+        # Get observation context
+        if x is not None:
+            torch_context = x.reshape(x.shape[0], self.n_local, -1, 1)
+            y_obs = {"y": jnp.asarray(torch_context)}
+        else:
+            y_obs = self.context
+            y_obs = tree.map(
+                lambda leaf: jnp.broadcast_to(
+                    leaf, (num_samples,) + leaf.shape[1:]
+                ),
+                y_obs,
+            )
+
+        # 1. Sample global params
+        global_tokens, global_decoder = Tokens.from_pytree_with_decoder(
+            {**y_obs, **global_param_samples},
+            condition=list(y_obs.keys()),
+            sample_ndims=1,
+            labeller=self.labeller,
+        )
+        global_posterior_tokens = self.tfmpe_global.sample_posterior_batched(
+            tokens=global_tokens, batch_size=1000
+        )
+        global_posterior_dict = global_decoder(global_posterior_tokens)
+        theta_g_star = {
+            k: v for k, v in global_posterior_dict.items()
+            if k in self.global_names
+        }
+
+        # 2. Reshape y_obs to single-group
+        y_single = tree.map(
+            lambda v: v.reshape(
+                num_samples * self.n_local, 1, *v.shape[2:]
+            ),
+            y_obs,
+        )
+
+        # 3. Repeat global params for each local group
+        theta_g_expanded = tree.map(
+            lambda v: jnp.repeat(v, self.n_local, axis=0),
+            theta_g_star,
+        )
+
+        # 4. Build local param templates (single-group shape)
+        local_param_template = {}
+        for name, (start, end) in self.slices:
+            if name in self.local_names:
+                event_dim = (end - start) // self.n_local
+                local_param_template[name] = jnp.ones((1, 1, event_dim, 1))
+        local_param_samples = {
+            key: jnp.tile(
+                value,
+                (num_samples * self.n_local,) + (1,) * (value.ndim - 1),
+            )
+            for key, value in local_param_template.items()
+        }
+
+        # 5. Sample local params
+        local_tokens, local_decoder = Tokens.from_pytree_with_decoder(
+            {**y_single, **theta_g_expanded, **local_param_samples},
+            condition=(
+                list(y_single.keys()) + list(theta_g_expanded.keys())
+            ),
+            sample_ndims=1,
+            labeller=self.labeller,
+        )
+        local_posterior_tokens = self.tfmpe_local.sample_posterior_batched(
+            tokens=local_tokens, batch_size=1000
+        )
+        local_posterior_dict = local_decoder(local_posterior_tokens)
+        theta_l_star = {
+            k: v for k, v in local_posterior_dict.items()
+            if k in self.local_names
+        }
+
+        # 6. Reshape local params back to (num_samples, n_local, ...)
+        theta_l_reshaped = tree.map(
+            lambda v: v.reshape(num_samples, self.n_local, *v.shape[2:]),
+            theta_l_star,
+        )
+
+        # 7. Flatten and concatenate
+        params_list = []
+        for name in self.global_names:
+            params_list.append(
+                theta_g_star[name].reshape(num_samples, -1)
+            )
+        for name in self.local_names:
+            params_list.append(
+                theta_l_reshaped[name].reshape(num_samples, -1)
+            )
+
+        posterior_flat = jnp.concatenate(params_list, axis=1)
+        posterior_samples = torch.from_numpy(
+            np.array(posterior_flat)
+        ).float()
+
+        if self.transforms is not None:
+            posterior_samples = self.transforms.inv(posterior_samples)
+
+        return posterior_samples
+
+    def log_prob(self, parameters):
         return None
 
 
@@ -667,7 +819,44 @@ def run(
 
     # Train TFMPE
     rng = jax.random.PRNGKey(42)
-    if ablation != 'direct':
+    if ablation == 'direct':
+        trained_tfmpe, all_losses = tfmpe_fit_directly(
+            tfmpe=tfmpe,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            n_groups=n_local,
+            n_samples_per_round=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            opt=opt,
+            n_iter_per_round=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            labeller=labeller,
+            delta=1e-3,
+            patience=100
+        )
+
+    elif ablation == 'pf':
+        trained_global, trained_local, all_losses = tfmpe_fit_pf(
+            tfmpe_global=tfmpe_global,
+            tfmpe_local=tfmpe_local,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            local_fn=local_fn,
+            global_names=global_names,
+            n_groups=n_local,
+            n_samples=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            opt_global=global_opt,
+            opt_local=local_opt,
+            n_iter=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            labeller=labeller,
+            delta=1e-3,
+            patience=100
+        )
+    else:
         trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
             tfmpe=tfmpe,
             y_obs=y_obs_dict,
@@ -687,84 +876,36 @@ def run(
             prob_transform=prob_transform,
             prior_log_prob=prior_log_prob,
         )
-    else:
-        trained_tfmpe, all_losses = tfmpe_fit_directly(
-            tfmpe=tfmpe,
-            simulator_fn=simulator_fn,
-            prior_fn=prior_fn,
-            n_groups=n_local,
-            n_samples_per_round=n_samples_per_round,
-            n_val_samples=n_val_samples,
-            opt=opt,
-            n_iter_per_round=n_iter_per_round,
-            batch_size=batch_size,
-            rng=rng,
+        
+
+    # Create posterior wrapper and sample
+    if ablation == 'pf':
+        posterior_wrapped = TFMPEPosteriorPF(
+            tfmpe_global=trained_global,
+            tfmpe_local=trained_local,
             labeller=labeller,
-            delta=1e-3,
-            patience=100
+            slices=slices,
+            global_names=global_names,
+            local_names=local_names,
+            n_local=n_local,
+            transforms=transforms if automatic_transforms_enabled else None,
+            context=y_obs_dict,
+        )
+    else:
+        posterior_wrapped = TFMPEPosterior(
+            tfmpe_model=trained_tfmpe,
+            labeller=labeller,
+            slices=slices,
+            global_names=global_names,
+            local_names=local_names,
+            n_local=n_local,
+            transforms=transforms if automatic_transforms_enabled else None,
+            context=y_obs_dict,
+            params_f_in=None,
+            context_f_in=None,
         )
 
-    # Create parameter tokens template for sampling
-    param_dict_template = prior_fn(rng, n_local, 1, None)
-    param_dict_samples = {
-        key: jnp.tile(value, (num_samples,) + (1,) * (value.ndim - 1))
-        for key, value in param_dict_template.items()
-    }
-
-    y_obs_sample = tree.map(
-        lambda leaf: jnp.broadcast_to(
-            leaf,
-            (num_samples,) + leaf.shape[1:])
-        ,
-        y_obs_dict
-    )
-
-    f_in = None
-
-    tokens, decoder = Tokens.from_pytree_with_decoder(
-        {
-            **y_obs_sample,
-            **param_dict_samples
-        },
-        condition=list(y_obs_dict.keys()),
-        sample_ndims=1,
-        labeller=labeller,
-        functional_inputs=f_in,
-    )
-
-    # Sample from posterior
-    rng_key = jax.random.PRNGKey(42)
-    nnx.reseed(trained_tfmpe, params=rng_key)
-    posterior_tokens = trained_tfmpe.sample_posterior(
-        tokens=tokens,
-    )
-
-    # Convert tokens back to flat tensor format
-    posterior_dict = decoder(posterior_tokens)
-        
-    params_list = []
-    for name in global_names + local_names:
-        params_list.append(posterior_dict[name].reshape(num_samples, -1))
-
-    posterior_flat = jnp.concatenate(params_list, axis=1)
-    posterior_samples = torch.from_numpy(np.array(posterior_flat)).float()
-
-    if automatic_transforms_enabled:
-        posterior_samples = transforms.inv(posterior_samples)
-
-    # Create posterior wrapper
-    posterior_wrapped = TFMPEPosterior(
-        tfmpe_model=trained_tfmpe,
-        labeller=labeller,
-        slices=slices,
-        global_names=global_names,
-        local_names=local_names,
-        n_local=n_local,
-        transforms=transforms if automatic_transforms_enabled else None,
-        context=y_obs_dict,
-        params_f_in=None,
-        context_f_in=None
-    )
+    posterior_samples = posterior_wrapped.sample((num_samples,))
 
     # Compute log probability at true parameters
     true_parameters = task.get_true_parameters(
