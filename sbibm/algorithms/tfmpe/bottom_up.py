@@ -770,10 +770,11 @@ def run(
         n_rounds = 5
     else:
         n_rounds = 1
-    n_val_samples = num_simulations // 10
+
+    batch_size = 100
+    n_val_samples = min(num_simulations // 10, batch_size)
     n_samples_per_round = num_simulations // n_rounds - n_val_samples
     n_iter_per_round = 1000
-    batch_size = 100
 
     # Get transforms
     transforms = task._get_transforms(n_l=n_local)["parameters"]
