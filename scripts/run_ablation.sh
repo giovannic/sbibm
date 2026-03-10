@@ -86,7 +86,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --algorithm "bottom_up" \
         --num_simulations 1000 \
         --num_observation "$OBS" \
-        --output_dir results \
+        --output_dir ablation_results \
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
@@ -98,7 +98,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --algorithm "bottom_up" \
         --num_simulations 5000 \
         --num_observation "$OBS" \
-        --output_dir results \
+        --output_dir ablation_results \
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
@@ -110,7 +110,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --algorithm "bottom_up" \
         --num_simulations 10000 \
         --num_observation "$OBS" \
-        --output_dir results \
+        --output_dir ablation_results \
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
