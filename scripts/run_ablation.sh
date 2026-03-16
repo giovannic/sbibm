@@ -90,7 +90,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
-        --num_samples 1000
+        --num_samples 1000 \
         --ablation "$ABLATION"
 
       python scripts/run_hierarchical_benchmark.py \
@@ -102,7 +102,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
-        --num_samples 1000
+        --num_samples 1000 \
         --ablation "$ABLATION"
 
       python scripts/run_hierarchical_benchmark.py \
@@ -114,7 +114,7 @@ for OBS in $(seq $START_OBS $END_OBS); do
         --device "$DEVICE" \
         --n_l "$N_L" \
         --seed 42 \
-        --num_samples 1000
+        --num_samples 1000 \
         --ablation "$ABLATION"
     done
   done
