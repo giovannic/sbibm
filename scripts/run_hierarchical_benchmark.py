@@ -130,6 +130,11 @@ def run_benchmark(
     )
     start_time = time.time()
 
+    if task_name in {'hierarchical_sir', 'hierarchical_slcp', 'hierarchical_two_moons'}:
+        algorithm_kwargs['sample_batch_size'] = 100
+    else:
+        algorithm_kwargs['sample_batch_size'] = 1_000
+
     samples, actual_num_sims, log_prob_true, posterior = run_algorithm(
         task=task,
         num_samples=num_samples,

@@ -43,6 +43,7 @@ class TFMPEPosterior:
         context_f_in,
         transforms=None,
         context=None,
+        sample_batch_size=100
     ):
         """Initialize TFMPE posterior wrapper.
 
@@ -69,6 +70,7 @@ class TFMPEPosterior:
         self.context = context
         self.params_f_in = params_f_in
         self.context_f_in = context_f_in
+        self.sample_batch_size = sample_batch_size
 
     def sample(self, shape, x=None):
         """Sample from posterior.
@@ -133,7 +135,7 @@ class TFMPEPosterior:
             
         posterior_tokens = self.tfmpe_model.sample_posterior_batched(
             tokens=tokens,
-            batch_size=1000
+            batch_size=self.sample_batch_size
         )
 
         # Convert tokens back to flat tensor format
@@ -202,6 +204,7 @@ class TFMPEPosteriorPF:
         n_local,
         transforms=None,
         context=None,
+        sample_batch_size=100
     ):
         self.tfmpe_global = tfmpe_global
         self.tfmpe_local = tfmpe_local
@@ -212,6 +215,7 @@ class TFMPEPosteriorPF:
         self.n_local = n_local
         self.transforms = transforms
         self.context = context
+        self.sample_batch_size = sample_batch_size
 
     def sample(self, shape, x=None):
         num_samples = shape[0]
@@ -250,7 +254,7 @@ class TFMPEPosteriorPF:
             labeller=self.labeller,
         )
         global_posterior_tokens = self.tfmpe_global.sample_posterior_batched(
-            tokens=global_tokens, batch_size=1000
+            tokens=global_tokens, batch_size=self.sample_batch_size
         )
         global_posterior_dict = global_decoder(global_posterior_tokens)
         theta_g_star = {
@@ -296,7 +300,7 @@ class TFMPEPosteriorPF:
             labeller=self.labeller,
         )
         local_posterior_tokens = self.tfmpe_local.sample_posterior_batched(
-            tokens=local_tokens, batch_size=1000
+            tokens=local_tokens, batch_size=self.sample_batch_size
         )
         local_posterior_dict = local_decoder(local_posterior_tokens)
         theta_l_star = {
@@ -606,6 +610,7 @@ def run(
     """
     device = kwargs.get('device', 'cpu')
     ablation = kwargs.get('ablation', 'none')
+    sample_batch_size = kwargs.get('sample_batch_size', 100) 
 
     # Load observation
     y_obs_torch = task.get_observation(num_observation=num_observation)
@@ -854,7 +859,8 @@ def run(
             rng=rng,
             labeller=labeller,
             delta=1e-3,
-            patience=100
+            patience=100,
+            sample_batch_size=sample_batch_size
         )
     else:
         trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
@@ -875,6 +881,7 @@ def run(
             labeller=labeller,
             prob_transform=prob_transform,
             prior_log_prob=prior_log_prob,
+            sample_batch_size=sample_batch_size
         )
         
 
@@ -890,6 +897,7 @@ def run(
             n_local=n_local,
             transforms=transforms if automatic_transforms_enabled else None,
             context=y_obs_dict,
+            sample_batch_size=sample_batch_size
         )
     else:
         posterior_wrapped = TFMPEPosterior(
@@ -903,6 +911,7 @@ def run(
             context=y_obs_dict,
             params_f_in=None,
             context_f_in=None,
+            sample_batch_size=sample_batch_size
         )
 
     posterior_samples = posterior_wrapped.sample((num_samples,))
