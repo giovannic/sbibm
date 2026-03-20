@@ -674,7 +674,9 @@ def run(
             n_encoder=2,
             n_heads=16,
             n_ff=2,
-            attention='linear'
+            attention='linear',
+            ops_dtype=jnp.bfloat16,
+            sensitive_ops_dtype=jnp.bfloat16
         )
     else:
         config = TransformerConfig(
@@ -682,6 +684,8 @@ def run(
             n_encoder=2,
             n_heads=16,
             n_ff=2,
+            ops_dtype=jnp.bfloat16,
+            sensitive_ops_dtype=jnp.bfloat16
         )
 
     rngs = nnx.Rngs(
