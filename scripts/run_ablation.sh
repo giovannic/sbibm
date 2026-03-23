@@ -54,6 +54,9 @@ ABLATIONS=(
   "joint"
   "mlp"
   "direct"
+  "linear"
+  "no_grouping"
+  "pf"
 )
 
 echo "Device: $DEVICE"
