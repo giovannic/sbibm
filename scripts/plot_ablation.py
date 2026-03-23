@@ -37,10 +37,11 @@ ABLATION_TOKENS = {
     "_direct_": "Direct",
     "_joint_": "Joint",
     "_mlp_": "MLP",
+    "_linear_": "Linear",
 }
 
 # Fixed method order and label map
-METHODS = ["TFMPE", "Direct", "Joint", "MLP"]
+METHODS = ["TFMPE", "Direct", "Joint", "MLP", "Linear"]
 METHOD_LABEL_MAP = {m: m for m in METHODS}
 
 
@@ -68,12 +69,17 @@ def load_ablation_results(input_dir: Path) -> dict[str, pd.DataFrame]:
         log.debug(f"Loading {csv_file.name}")
 
         # Determine ablation method from filename
+        # Only match tokens after "_bottom_up" to avoid false matches
+        # in task names (e.g. "gaussian_linear" contains "_linear_")
         fname = csv_file.name
         method = "TFMPE"  # default: no ablation token
-        for token, label in ABLATION_TOKENS.items():
-            if token in fname:
-                method = label
-                break
+        bu_idx = fname.find("_bottom_up")
+        if bu_idx != -1:
+            suffix = fname[bu_idx + len("_bottom_up"):]
+            for token, label in ABLATION_TOKENS.items():
+                if token in suffix:
+                    method = label
+                    break
 
         df = pd.read_csv(csv_file)
         df["method"] = method
@@ -102,6 +108,9 @@ def create_ablation_plot(
 ) -> plt.Figure:
     """Create line plots with bootstrap CIs for ablation study.
 
+    Each ablation variant gets its own row, showing TFMPE (dotted baseline)
+    alongside the variant (solid). Columns are tasks.
+
     Args:
         results: Dict mapping task_name -> DataFrame
         metric: Name of the metric column to plot
@@ -124,13 +133,18 @@ def create_ablation_plot(
     tasks = sorted(results.keys())
     n_tasks = len(tasks)
 
-    # Assign colors using tab10 palette in fixed method order
-    cmap = plt.colormaps["tab10"]
-    method_colors = {method: cmap(i) for i, method in enumerate(METHODS)}
+    # Ablation variants (one per row), excluding TFMPE which is the baseline
+    variants = [m for m in METHODS if m != "TFMPE"]
+    n_rows = len(variants)
 
-    figsize = (cell_width * n_tasks, cell_height)
+    # Colors: gray/black for TFMPE baseline, distinct color per variant
+    cmap = plt.colormaps["tab10"]
+    baseline_color = "0.4"  # dark gray
+    variant_colors = {variant: cmap(i) for i, variant in enumerate(variants)}
+
+    figsize = (cell_width * n_tasks, cell_height * n_rows)
     fig, axes = plt.subplots(
-        1,
+        n_rows,
         n_tasks,
         figsize=figsize,
         squeeze=False,
@@ -139,38 +153,69 @@ def create_ablation_plot(
 
     metric_label = metric.replace("_", " ").title()
 
-    for task_idx, task_name in enumerate(tasks):
-        ax = axes[0, task_idx]
-        df = results[task_name]
+    for row_idx, variant in enumerate(variants):
+        for task_idx, task_name in enumerate(tasks):
+            ax = axes[row_idx, task_idx]
+            df = results[task_name]
 
-        # Format task title
-        title = task_name.replace("hierarchical_", "").replace("_", " ").title()
-        title = title.replace("Sir", "SIR").replace("Slcp", "SLCP")
+            # Format task title (only on top row)
+            title = task_name.replace("hierarchical_", "").replace("_", " ").title()
+            title = title.replace("Sir", "SIR").replace("Slcp", "SLCP")
 
-        plot_task_panel(
-            ax=ax,
-            df=df,
-            metric=metric,
-            groups=METHODS,
-            group_colors=method_colors,
-            x_column="num_simulations",
-            x_label="Number of Simulations",
-            group_column="method",
-            label_map=METHOD_LABEL_MAP,
-            show_title=True,
-            title=title,
-            show_ylabel=(task_idx == 0),
-            ylabel=metric_label,
-        )
+            # Only show TFMPE + this variant
+            row_groups = ["TFMPE", variant]
+            row_colors = {"TFMPE": baseline_color, variant: variant_colors[variant]}
+            row_linestyles = {"TFMPE": ":", variant: "-"}
 
-    # Shared legend at bottom
-    handles, labels = axes[0, 0].get_legend_handles_labels()
+            plot_task_panel(
+                ax=ax,
+                df=df,
+                metric=metric,
+                groups=row_groups,
+                group_colors=row_colors,
+                x_column="num_simulations",
+                x_label="Number of Simulations",
+                group_column="method",
+                label_map=METHOD_LABEL_MAP,
+                group_linestyles=row_linestyles,
+                show_title=(row_idx == 0),
+                title=title,
+                show_ylabel=(task_idx == 0),
+                ylabel=metric_label,
+                show_xlabel=(row_idx == n_rows - 1),
+            )
+
+            # Row label on leftmost column
+            if task_idx == 0:
+                ax.annotate(
+                    variant,
+                    xy=(0, 0.5),
+                    xytext=(-ax.yaxis.labelpad - 30, 0),
+                    xycoords="axes fraction",
+                    textcoords="offset points",
+                    ha="right",
+                    va="center",
+                    fontsize=10,
+                    fontweight="bold",
+                    rotation=90,
+                )
+
+    # Shared legend at bottom (just need one pair: TFMPE dotted + variant solid)
+    import matplotlib.lines as mlines
+
+    baseline_handle = mlines.Line2D(
+        [], [], color=baseline_color, linestyle=":", marker="o",
+        markersize=5, linewidth=2, label="TFMPE",
+    )
+    variant_handle = mlines.Line2D(
+        [], [], color="0.3", linestyle="-", marker="o",
+        markersize=5, linewidth=2, label="Variant",
+    )
     fig.legend(
-        handles,
-        labels,
+        handles=[baseline_handle, variant_handle],
         loc="upper center",
         bbox_to_anchor=(0.5, -0.02),
-        ncol=len(METHODS),
+        ncol=2,
         fontsize=9,
     )
 

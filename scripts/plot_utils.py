@@ -28,6 +28,7 @@ def plot_task_panel(
     x_label: str,
     group_column: str = "algorithm",
     label_map: dict | None = None,
+    group_linestyles: dict | None = None,
     show_title: bool = False,
     title: str = "",
     show_ylabel: bool = False,
@@ -92,6 +93,7 @@ def plot_task_panel(
 
         color = group_colors[group]
         label = label_map.get(group, group.upper())
+        linestyle = (group_linestyles or {}).get(group, "-")
 
         ax.errorbar(
             x_values,
@@ -103,6 +105,7 @@ def plot_task_panel(
             linewidth=2,
             capsize=3,
             label=label,
+            linestyle=linestyle,
         )
 
     # Formatting
