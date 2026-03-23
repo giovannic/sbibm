@@ -671,7 +671,7 @@ def run(
     if ablation == 'linear':
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=1,
+            n_encoder=2,
             n_heads=16,
             n_ff=2,
             attention='linear',
@@ -683,7 +683,7 @@ def run(
             group_dim = 8
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=1,
+            n_encoder=2,
             n_heads=16,
             n_ff=2,
             group_dim=group_dim
