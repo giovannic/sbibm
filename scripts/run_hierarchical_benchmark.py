@@ -130,7 +130,7 @@ def run_benchmark(
     )
     start_time = time.time()
 
-    algorithm_kwargs['sample_batch_size'] = 1_000
+    algorithm_kwargs['sample_batch_size'] = 10_000
 
     samples, actual_num_sims, log_prob_true, posterior = run_algorithm(
         task=task,
