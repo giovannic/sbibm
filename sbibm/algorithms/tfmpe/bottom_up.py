@@ -671,21 +671,22 @@ def run(
     if ablation == 'linear':
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=2,
+            n_encoder=1,
             n_heads=16,
             n_ff=2,
             attention='linear',
-            ops_dtype=jnp.bfloat16,
-            sensitive_ops_dtype=jnp.bfloat16
         )
     else:
+        if ablation == 'no_grouping':
+            group_dim = 0
+        else:
+            group_dim = 8
         config = TransformerConfig(
             latent_dim=64,
-            n_encoder=2,
+            n_encoder=1,
             n_heads=16,
             n_ff=2,
-            ops_dtype=jnp.bfloat16,
-            sensitive_ops_dtype=jnp.bfloat16
+            group_dim=group_dim
         )
 
     rngs = nnx.Rngs(

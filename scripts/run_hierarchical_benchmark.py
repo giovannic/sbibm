@@ -374,7 +374,7 @@ def main():
     )
     parser.add_argument(
         "--ablation",
-        choices=['none', 'mlp', 'joint', 'linear', 'sequential', 'direct', 'pf'],
+        choices=['none', 'mlp', 'joint', 'linear', 'sequential', 'direct', 'pf', 'no_grouping'],
         default='none',
         help="Ablation experiment",
     )
