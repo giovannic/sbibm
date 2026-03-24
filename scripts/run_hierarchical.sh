@@ -3,7 +3,9 @@
 # Default values
 DEVICE="cpu"
 N_L=5
-NUM_OBSERVATIONS=10
+START_OBS=1
+END_OBS=10
+CUDA_DEVICE=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -16,8 +18,16 @@ while [[ $# -gt 0 ]]; do
       N_L="$2"
       shift 2
       ;;
-    --num_observations)
-      NUM_OBSERVATIONS="$2"
+    --start_obs)
+      START_OBS="$2"
+      shift 2
+      ;;
+    --end_obs)
+      END_OBS="$2"
+      shift 2
+      ;;
+    --cuda_device)
+      CUDA_DEVICE="$2"
       shift 2
       ;;
     *)
@@ -26,6 +36,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Set CUDA_VISIBLE_DEVICES if specified
+if [[ -n "$CUDA_DEVICE" ]]; then
+  export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+  echo "CUDA_VISIBLE_DEVICES: $CUDA_DEVICE"
+fi
 
 # Loop through all hierarchical tasks except bernoulli_glm
 TASKS=(
@@ -41,7 +57,7 @@ ALGORITHMS=("bottom_up" "snpe" "deepset" "fmpe" "fmpe_transformer")
 
 echo "Device: $DEVICE"
 echo "n_l (local contexts): $N_L"
-echo "num_observations: $NUM_OBSERVATIONS"
+echo "Observations: $START_OBS to $END_OBS"
 echo ""
 
 # Regenerate observations if n_l != 5
@@ -61,7 +77,7 @@ fi
 
 echo "Running benchmarks with device: $DEVICE"
 
-for OBS in $(seq 1 $NUM_OBSERVATIONS); do
+for OBS in $(seq $START_OBS $END_OBS); do
   for ALGORITHM in "${ALGORITHMS[@]}"; do
     for TASK in "${TASKS[@]}"; do
       echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM, observation: $OBS"
