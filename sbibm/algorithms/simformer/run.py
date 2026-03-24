@@ -63,8 +63,15 @@ class _SimformerTaskShim:
 class SimformerPosterior:
     """Benchmark-compatible posterior wrapper around simformer."""
 
-    def __init__(self, model, observation: torch.Tensor, seed: Optional[int] = None):
+    def __init__(
+        self,
+        model,
+        observation: torch.Tensor,
+        parameter_transform=None,
+        seed: Optional[int] = None,
+    ):
         self.model = model
+        self.parameter_transform = parameter_transform
         self.seed = 0 if seed is None else int(seed)
         self.observation = observation.detach().cpu().float()
         self.model.set_default_x_o(self._to_jax(self.observation))
@@ -79,6 +86,11 @@ class SimformerPosterior:
     def _to_torch(array) -> torch.Tensor:
         return torch.from_numpy(np.array(array, copy=True)).float().cpu()
 
+    def _to_constrained(self, samples: torch.Tensor) -> torch.Tensor:
+        if self.parameter_transform is None:
+            return samples
+        return self.parameter_transform.inv(samples)
+
     def sample(self, shape, x=None):
         import jax
 
@@ -91,6 +103,7 @@ class SimformerPosterior:
         if x is None:
             samples = self.model.sample(num_samples, rng=key)
             samples = self._to_torch(samples)
+            samples = self._to_constrained(samples)
             return samples.reshape(*shape, -1)
 
         x = x.detach().cpu().float()
@@ -99,6 +112,7 @@ class SimformerPosterior:
         x_jax = self._to_jax(x)
         batched = self.model.sample_batched(1, x_o=x_jax, rng=key)
         batched = self._to_torch(batched).squeeze(1)
+        batched = self._to_constrained(batched)
         return batched
 
 
@@ -109,6 +123,7 @@ def _build_method_cfg(
     sampling_steps: int,
     train_step_floor: int,
     train_step_cap: int,
+    condition_mask_name: str,
 ):
     model_cfg = _load_yaml_config("method/model/score_transformer_small.yaml")
     train_cfg = _load_yaml_config("method/train/train_score_transformer.yaml")
@@ -118,18 +133,15 @@ def _build_method_cfg(
     train_cfg["training_batch_size"] = training_batch_size
     train_cfg["min_number_steps"] = max(train_step_floor, 10)
     train_cfg["max_number_steps"] = max(train_step_cap, 10)
-    train_cfg["total_number_steps_scaling"] = min(
-        train_cfg.get("total_number_steps_scaling", 3), 2
-    )
     if num_simulations < 100:
         train_cfg["validation_fraction"] = 0.0
-    train_cfg.setdefault("condition_mask_fn", {"name": "structured_random"})
+    train_cfg["condition_mask_fn"] = {"name": condition_mask_name}
     train_cfg.setdefault("edge_mask_fn", {"name": "none"})
 
     posterior_cfg["num_steps"] = sampling_steps
 
     method_cfg = {
-        "name": "score_transformer",
+        "name": "score_transformer_posterior",
         "backend": "jax",
         "device": "gpu" if device.startswith("cuda") else "cpu",
         "model": model_cfg,
@@ -150,6 +162,13 @@ def _ensure_min_rows(theta: torch.Tensor, x: torch.Tensor, min_rows: int = 10):
     return theta, x
 
 
+def _get_parameter_transform(task: Task, automatic_transforms_enabled: bool):
+    if not automatic_transforms_enabled or not hasattr(task, "_get_transforms"):
+        return None
+    transforms = task._get_transforms(automatic_transforms_enabled=True)
+    return transforms.get("parameters")
+
+
 def run(
     task: Task,
     num_samples: int,
@@ -158,10 +177,12 @@ def run(
     observation: Optional[torch.Tensor] = None,
     device: str = "cpu",
     seed: Optional[int] = None,
-    training_batch_size: int = 128,
-    sampling_steps: int = 100,
-    train_step_floor: int = 200,
-    train_step_cap: int = 1000,
+    training_batch_size: int = 1000,
+    sampling_steps: int = 500,
+    train_step_floor: int = 5000,
+    train_step_cap: int = 100000,
+    automatic_transforms_enabled: bool = True,
+    condition_mask_name: str = "posterior",
     **kwargs,
 ) -> Tuple[torch.Tensor, int, Optional[torch.Tensor], SimformerPosterior]:
     """Run simformer on an existing hierarchical sbibm task."""
@@ -176,8 +197,13 @@ def run(
 
     prior = task.get_prior()
     simulator = task.get_simulator()
+    parameter_transform = _get_parameter_transform(
+        task, automatic_transforms_enabled=automatic_transforms_enabled
+    )
     theta = prior(num_samples=num_simulations).detach().cpu().float()
     x = simulator(theta.to(device=device)).detach().cpu().float()
+    if parameter_transform is not None:
+        theta = parameter_transform(theta)
     theta_train, x_train = _ensure_min_rows(theta, x)
 
     if observation is None:
@@ -197,11 +223,17 @@ def run(
         sampling_steps=sampling_steps,
         train_step_floor=train_step_floor,
         train_step_cap=train_step_cap,
+        condition_mask_name=condition_mask_name,
     )
     rng = jr.PRNGKey(0 if seed is None else int(seed))
 
     model = train_transformer_model(shim, data, method_cfg, rng)
-    posterior = SimformerPosterior(model, observation.squeeze(0), seed=seed)
+    posterior = SimformerPosterior(
+        model,
+        observation.squeeze(0),
+        parameter_transform=parameter_transform,
+        seed=seed,
+    )
     samples = posterior.sample((num_samples,))
 
     return samples, num_simulations, None, posterior
