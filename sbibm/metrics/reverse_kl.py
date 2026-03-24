@@ -13,7 +13,7 @@ def reverse_kl(
     task: Task,
     num_observation: int,
     num_samples: int = 10000,
-    device: str = 'cpu'
+    device: str = 'cpu',
 ) -> torch.Tensor:
     """Estimate reverse KL divergence without reference posterior samples
 

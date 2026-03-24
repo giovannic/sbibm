@@ -37,7 +37,7 @@ TASKS=(
   "hierarchical_two_moons"
 )
 
-ALGORITHMS=("bottom_up" "snpe" "deepset")
+ALGORITHMS=("bottom_up" "snpe" "deepset" "fmpe" "fmpe_transformer")
 
 echo "Device: $DEVICE"
 echo "n_l (local contexts): $N_L"

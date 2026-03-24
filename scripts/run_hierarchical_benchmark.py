@@ -117,6 +117,11 @@ def run_benchmark(
         from sbibm.algorithms.deepset import run as run_algorithm
     elif algorithm == "bottom_up":
         from sbibm.algorithms.tfmpe.bottom_up import run as run_algorithm
+    elif algorithm == "fmpe":
+        from sbibm.algorithms.sbi.fmpe import run as run_algorithm
+    elif algorithm == "fmpe_transformer":
+        from sbibm.algorithms.sbi.fmpe import run as run_algorithm
+        algorithm_kwargs["vf_estimator"] = "transformer"
     else:
         raise ValueError(
             f"Unknown algorithm: {algorithm}. "
@@ -170,7 +175,7 @@ def run_benchmark(
             task=task,
             num_observation=num_observation,
             num_samples=num_samples,
-            device=algorithm_kwargs.get('device', 'cpu')
+            device=algorithm_kwargs.get('device', 'cpu'),
         )
         results["reverse_kl"] = rkl.item()
         log.info(f"Reverse KL: {rkl.item():.6f}")
@@ -303,7 +308,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         type=str,
-        choices=["snpe", "snle", "snre", "deepset", "bottom_up"],
+        choices=["snpe", "snle", "snre", "deepset", "bottom_up", "fmpe", "fmpe_transformer"],
         required=True,
         help="Algorithm to use",
     )
