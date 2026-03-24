@@ -122,10 +122,12 @@ def run_benchmark(
     elif algorithm == "fmpe_transformer":
         from sbibm.algorithms.sbi.fmpe import run as run_algorithm
         algorithm_kwargs["vf_estimator"] = "transformer"
+    elif algorithm == "simformer":
+        from sbibm.algorithms.simformer import run as run_algorithm
     else:
         raise ValueError(
             f"Unknown algorithm: {algorithm}. "
-            f"Choose from: snpe, snle, snre, deepset"
+            f"Choose from: snpe, snle, snre, deepset, bottom_up, fmpe, fmpe_transformer, simformer"
         )
 
     # Run algorithm
@@ -308,7 +310,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         type=str,
-        choices=["snpe", "snle", "snre", "deepset", "bottom_up", "fmpe", "fmpe_transformer"],
+        choices=["snpe", "snle", "snre", "deepset", "bottom_up", "fmpe", "fmpe_transformer", "simformer"],
         required=True,
         help="Algorithm to use",
     )
