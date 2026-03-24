@@ -24,6 +24,7 @@ class Task:
         name_display: Optional[str] = None,
         num_reference_posterior_samples: int = None,
         observation_seeds: Optional[List[int]] = None,
+        generate_in_memory: bool = False,
     ):
         """Base class for tasks.
 
@@ -64,6 +65,8 @@ class Task:
             if observation_seeds is not None
             else [i + 1000000 for i in range(self.num_observations)]
         )
+        self._generate_in_memory = generate_in_memory
+        self._observation_cache = {}
 
     @abstractmethod
     def get_prior(self) -> Callable:
@@ -86,8 +89,54 @@ class Task:
         """Get list containing parameter labels"""
         return [f"parameter_{i+1}" for i in range(self.dim_parameters)]
 
+    def _generate_observation(self, num_observation: int) -> None:
+        """Generate observation and true parameters in-memory from seed.
+
+        Results are cached so repeated calls are free. RNG state is
+        saved and restored so this never perturbs the caller's random stream.
+        """
+        if num_observation in self._observation_cache:
+            return
+
+        observation_seed = self.observation_seeds[num_observation - 1]
+
+        # Save RNG state
+        np_state = np.random.get_state()
+        torch_state = torch.random.get_rng_state()
+        cuda_states = None
+        if torch.cuda.is_available():
+            cuda_states = [
+                torch.cuda.get_rng_state(d)
+                for d in range(torch.cuda.device_count())
+            ]
+
+        try:
+            np.random.seed(observation_seed)
+            torch.manual_seed(observation_seed)
+
+            prior = self.get_prior()
+            true_parameters = prior(num_samples=1)
+            simulator = self.get_simulator()
+            observation = simulator(true_parameters)
+
+            self._observation_cache[num_observation] = (
+                true_parameters.detach().cpu().clone(),
+                self.flatten_data(observation.detach().cpu().clone()),
+            )
+        finally:
+            # Restore RNG state
+            np.random.set_state(np_state)
+            torch.random.set_rng_state(torch_state)
+            if cuda_states is not None:
+                for d, state in enumerate(cuda_states):
+                    torch.cuda.set_rng_state(state, d)
+
     def get_observation(self, num_observation: int) -> torch.Tensor:
         """Get observed data for a given observation number"""
+        if self._generate_in_memory:
+            self._generate_observation(num_observation)
+            return self._observation_cache[num_observation][1]
+
         path = (
             self.path
             / "files"
@@ -113,6 +162,10 @@ class Task:
 
     def get_true_parameters(self, num_observation: int) -> torch.Tensor:
         """Get true parameters (parameters that generated the data) for a given observation number"""
+        if self._generate_in_memory:
+            self._generate_observation(num_observation)
+            return self._observation_cache[num_observation][0]
+
         path = (
             self.path
             / "files"

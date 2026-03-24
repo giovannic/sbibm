@@ -64,20 +64,8 @@ for OBS in $(seq $START_OBS $END_OBS); do
     echo "Running benchmarks for n_l=$N_L, observation=$OBS"
     echo "========================================"
 
-    # Regenerate observations for this n_l value
-    echo "Regenerating observations for n_l=$N_L..."
-    for TASK in "${TASKS[@]}"; do
-      echo "Regenerating observations for task: $TASK with n_l=$N_L"
-      python sbibm/tasks/"$TASK"/task.py --n_l "$N_L"
-      if [[ $? -ne 0 ]]; then
-        echo "Error regenerating observations for $TASK"
-        exit 1
-      fi
-    done
-    echo "Observation regeneration completed!"
-    echo ""
-
     # Run benchmarks for all algorithms and tasks with this n_l
+    # (observations are generated in-memory from seed, no disk regeneration needed)
     for ALGORITHM in "${ALGORITHMS[@]}"; do
       for TASK in "${TASKS[@]}"; do
         echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM, n_l: $N_L, observation: $OBS"

@@ -189,6 +189,7 @@ class HierarchicalSIR(Task):
             num_simulations=[100, 1000, 10000, 100000, 1000000],
             observation_seeds=observation_seeds,
             path=Path(__file__).parent.absolute(),
+            generate_in_memory=True,
         )
 
         # Define hierarchical prior distribution
