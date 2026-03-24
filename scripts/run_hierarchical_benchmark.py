@@ -87,14 +87,15 @@ def run_benchmark(
     log.info(f"Loading task: {task_name} with n_l={n_l}")
     task = sbibm.get_task(task_name, n_l=n_l, device=algorithm_kwargs.get('device', 'cpu'))
 
-    # Extract n_l for hierarchical tasks (reduce simulations for SNPE)
+    # Extract n_l for hierarchical tasks (reduce simulations for NPE-style methods)
     n_l = getattr(task, 'n_l', 1)
     adjusted_num_simulations = num_simulations
-    if algorithm == "snpe" and n_l > 1:
+    npe_scaled_algorithms = {"snpe", "fmpe", "fmpe_transformer", "simformer"}
+    if algorithm in npe_scaled_algorithms and n_l > 1:
         n_sim_per_sample = n_l
         adjusted_num_simulations = num_simulations // n_sim_per_sample
         log.info(
-            f"Reducing SNPE simulations by factor of n_l={n_l}: "
+            f"Reducing {algorithm} simulations by factor of n_l={n_l}: "
             f"{num_simulations} -> {adjusted_num_simulations}"
         )
     if algorithm == "deepset" and n_l > 1:
