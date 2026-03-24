@@ -130,10 +130,11 @@ def run_benchmark(
     )
     start_time = time.time()
 
-    if task_name in {'hierarchical_sir', 'hierarchical_slcp', 'hierarchical_two_moons'}:
-        algorithm_kwargs['sample_batch_size'] = 100
-    else:
-        algorithm_kwargs['sample_batch_size'] = 1_000
+    if algorithm == 'bottom_up':
+        if task_name in {'hierarchical_sir', 'hierarchical_slcp', 'hierarchical_two_moons'}:
+            algorithm_kwargs['sample_batch_size'] = 100
+        else:
+            algorithm_kwargs['sample_batch_size'] = 1_000
 
     samples, actual_num_sims, log_prob_true, posterior = run_algorithm(
         task=task,
@@ -402,6 +403,9 @@ def main():
     log.info("=" * 80)
 
     # Run benchmark
+    extra_kwargs = {}
+    if args.algorithm == 'bottom_up':
+        extra_kwargs['ablation'] = args.ablation
     results = run_benchmark(
         task_name=args.task,
         algorithm=args.algorithm,
@@ -419,7 +423,7 @@ def main():
         num_rounds=args.num_rounds,
         device=args.device,
         automatic_transforms_enabled=True,
-        ablation=args.ablation,
+        **extra_kwargs
     )
 
     if args.ablation != 'none':

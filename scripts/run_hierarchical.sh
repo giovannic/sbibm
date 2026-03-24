@@ -61,7 +61,7 @@ fi
 
 echo "Running benchmarks with device: $DEVICE"
 
-for OBS in $(seq 3 $NUM_OBSERVATIONS); do
+for OBS in $(seq 1 $NUM_OBSERVATIONS); do
   for ALGORITHM in "${ALGORITHMS[@]}"; do
     for TASK in "${TASKS[@]}"; do
       echo "Running benchmark for task: $TASK with algorithm: $ALGORITHM, observation: $OBS"
