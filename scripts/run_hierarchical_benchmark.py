@@ -156,6 +156,7 @@ def run_benchmark(
         "algorithm": algorithm,
         "num_simulations": actual_num_sims,
         "num_observation": num_observation,
+        "n_l": n_l,
         "elapsed_time": elapsed_time,
         "seed": seed,
     }
