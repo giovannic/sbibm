@@ -19,6 +19,8 @@ from typing import Optional
 
 import pandas as pd
 
+NPE_SCALED_ALGORITHMS = {"snpe", "snpe_5r", "fmpe", "fmpe_transformer", "simformer"}
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for the table generation script."""
@@ -75,17 +77,20 @@ def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
         # Apply scaling to num_simulations if n_l > 1
         if n_l > 1:
             df = results[task_name]
-            snpe_mask = df["algorithm"] == "snpe"
-
-            if snpe_mask.any():
-                df.loc[snpe_mask, "num_simulations"] *= n_l
-                log.info(f"  Scaled SNPE num_simulations by {n_l}")
-
+            npe_mask = df["algorithm"].isin(NPE_SCALED_ALGORITHMS)
             deepset_mask = df["algorithm"] == "deepset"
+
+            if npe_mask.any():
+                df.loc[npe_mask, "num_simulations"] *= n_l
+                scaled_algorithms = sorted(df.loc[npe_mask, "algorithm"].unique())
+                log.info(
+                    f"  Scaled {', '.join(scaled_algorithms)} num_simulations by {n_l}"
+                )
+
             if deepset_mask.any():
-                scale = n_l // 2
-                df.loc[deepset_mask, "num_simulations"] *= scale
-                log.info(f"  Scaled Deepset num_simulations by {scale}")
+                deepset_scale = (n_l + 1) // 2
+                df.loc[deepset_mask, "num_simulations"] *= deepset_scale
+                log.info(f"  Scaled DeepSet num_simulations by {deepset_scale}")
 
     return results
 
@@ -143,13 +148,17 @@ def load_n_l_scaling_results(input_dir: Path, n_l_values: Optional[list[int]] = 
         log.info(f"Loaded {len(df)} n_l configurations for '{task_name}'")
 
         # Apply scaling based on algorithm using the n_l column
-        snpe_mask = df["algorithm"] == "snpe"
+        npe_mask = df["algorithm"].isin(NPE_SCALED_ALGORITHMS)
         deepset_mask = df["algorithm"] == "deepset"
 
-        if snpe_mask.any():
-            # SNPE: scale by n_l
-            df.loc[snpe_mask, "num_simulations"] *= df.loc[snpe_mask, "n_l"].astype(int)
-            log.info("  Scaled SNPE num_simulations by n_l")
+        if npe_mask.any():
+            # NPE-style methods: scale by n_l
+            df.loc[npe_mask, "num_simulations"] *= df.loc[npe_mask, "n_l"].astype(int)
+            scaled_algorithms = sorted(df.loc[npe_mask, "algorithm"].unique())
+            log.info(
+                "  Scaled "
+                f"{', '.join(scaled_algorithms)} num_simulations by n_l"
+            )
 
         if deepset_mask.any():
             # DeepSet: scale by (n_l + 1) // 2

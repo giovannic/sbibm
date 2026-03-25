@@ -90,7 +90,7 @@ def run_benchmark(
     # Extract n_l for hierarchical tasks (reduce simulations for NPE-style methods)
     n_l = getattr(task, 'n_l', 1)
     adjusted_num_simulations = num_simulations
-    npe_scaled_algorithms = {"snpe", "fmpe", "fmpe_transformer", "simformer"}
+    npe_scaled_algorithms = {"snpe", "snpe_5r", "fmpe", "fmpe_transformer", "simformer"}
     if algorithm in npe_scaled_algorithms and n_l > 1:
         n_sim_per_sample = n_l
         adjusted_num_simulations = num_simulations // n_sim_per_sample
@@ -108,8 +108,10 @@ def run_benchmark(
 
     # Import algorithm
     log.info(f"Importing algorithm: {algorithm}")
-    if algorithm == "snpe":
+    if algorithm in ("snpe", "snpe_5r"):
         from sbibm.algorithms.sbi.snpe import run as run_algorithm
+        if algorithm == "snpe_5r":
+            algorithm_kwargs["num_rounds"] = 5
     elif algorithm == "snle":
         from sbibm.algorithms.sbi.snle import run as run_algorithm
     elif algorithm == "snre":
@@ -128,7 +130,7 @@ def run_benchmark(
     else:
         raise ValueError(
             f"Unknown algorithm: {algorithm}. "
-            f"Choose from: snpe, snle, snre, deepset, bottom_up, fmpe, fmpe_transformer, simformer"
+            f"Choose from: snpe, snpe_5r, snle, snre, deepset, bottom_up, fmpe, fmpe_transformer, simformer"
         )
 
     # Run algorithm
@@ -311,7 +313,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         type=str,
-        choices=["snpe", "snle", "snre", "deepset", "bottom_up", "fmpe", "fmpe_transformer", "simformer"],
+        choices=["snpe", "snpe_5r", "snle", "snre", "deepset", "bottom_up", "fmpe", "fmpe_transformer", "simformer"],
         required=True,
         help="Algorithm to use",
     )

@@ -23,7 +23,7 @@ import pandas as pd
 from plot_utils import plot_task_panel, setup_logging
 
 
-NPE_SCALED_ALGORITHMS = {"snpe", "fmpe", "fmpe_transformer", "simformer"}
+NPE_SCALED_ALGORITHMS = {"snpe", "snpe_5r", "fmpe", "fmpe_transformer", "simformer"}
 
 
 def load_all_results(input_dir: Path, n_l: int = 1) -> dict:
@@ -159,6 +159,7 @@ def load_n_l_scaling_results(input_dir: Path) -> dict:
 # Label map for algorithm display names
 ALGO_LABEL_MAP = {
     "snpe": "NPE",
+    "snpe_5r": "SNPE (5 rounds)",
     "fmpe": "FMPE",
     "fmpe_transformer": "FMPE Transformer",
     "simformer": "Simformer",
