@@ -1,0 +1,7 @@
+
+variant: joint
+attention: default
+group_dim: 8
+architecture: single
+training: bottom_up
+n_rounds: 1

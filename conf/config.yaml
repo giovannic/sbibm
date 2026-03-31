@@ -1,0 +1,22 @@
+defaults:
+  - algorithm: bottom_up
+  - task: hierarchical_two_moons
+  - _self_
+
+# Common parameters
+num_simulations: 5000
+num_observation: 1
+num_samples: 1000
+seed: 42
+device: cpu
+n_l: 5
+automatic_transforms_enabled: true
+
+# Visualization
+plot_posterior: false
+max_local_contexts: 2
+verbose: false
+
+# Aggregation directory for analysis scripts (flat CSV collection)
+# Results are also copied here after each run so analysis scripts work unchanged
+aggregate_dir: ${hydra:runtime.cwd}/results_aggregated

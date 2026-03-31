@@ -1,0 +1,6 @@
+
+name: fmpe_transformer
+_target_: sbibm.algorithms.sbi.fmpe.run
+vf_estimator: transformer
+npe_scaled: true
+deepset_scaled: false

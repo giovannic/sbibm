@@ -1,0 +1,8 @@
+
+name: snpe_5r
+_target_: sbibm.algorithms.sbi.snpe.run
+num_rounds: 5
+neural_net: nsf
+hidden_features: 50
+npe_scaled: true
+deepset_scaled: false

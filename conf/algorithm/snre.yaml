@@ -1,0 +1,8 @@
+
+name: snre
+_target_: sbibm.algorithms.sbi.snre.run
+num_rounds: 10
+neural_net: resnet
+hidden_features: 50
+npe_scaled: false
+deepset_scaled: false

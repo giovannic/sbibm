@@ -1,0 +1,6 @@
+
+name: fmpe
+_target_: sbibm.algorithms.sbi.fmpe.run
+vf_estimator: mlp
+npe_scaled: true
+deepset_scaled: false

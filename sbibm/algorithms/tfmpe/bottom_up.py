@@ -578,6 +578,273 @@ def make_local_fn(task, automatic_transforms_enabled: bool = False, device='cpu'
     return local_fn
 
 
+def _build_model(
+    architecture,
+    attention,
+    group_dim,
+    tokens,
+    labeller,
+    prior_fn,
+    simulator_fn,
+    key,
+    n_local,
+):
+    """Build TFMPE model(s) based on ablation architecture config.
+
+    Args:
+        architecture: 'single', 'two_stage', or 'mlp'
+        attention: 'linear' or 'default'
+        group_dim: Group dimension for transformer (0 disables grouping)
+        tokens: Sample tokens for model initialization
+        labeller: Token labeller
+        prior_fn: Prior sampling function
+        simulator_fn: Simulator function
+        key: JAX random key
+        n_local: Number of local groups
+
+    Returns:
+        Tuple of (tfmpe_model_or_list, optimizer_or_list)
+    """
+    if attention == 'linear':
+        config = TransformerConfig(
+            latent_dim=64,
+            n_encoder=2,
+            n_heads=16,
+            n_ff=2,
+            attention='linear',
+        )
+    else:
+        config = TransformerConfig(
+            latent_dim=64,
+            n_encoder=2,
+            n_heads=16,
+            n_ff=2,
+            group_dim=group_dim,
+        )
+
+    rngs = nnx.Rngs(
+        params=jax.random.PRNGKey(0),
+        dropout=jax.random.PRNGKey(1),
+    )
+    base_dist = NormalDistribution(rngs=rngs)
+
+    if architecture == 'single':
+        estimator = Transformer(
+            config=config, tokens=tokens, rngs=rngs,
+        )
+        tfmpe = TFMPE(
+            vf_network=estimator,
+            base_dist=base_dist,
+            solver=diffrax.Dopri5(),
+        )
+        opt = nnx.Optimizer(
+            tfmpe, optax.adam(learning_rate=1e-4), wrt=nnx.Param
+        )
+        return tfmpe, opt
+
+    # Two-stage or MLP: build separate local and global models
+    if architecture == 'mlp':
+        local_sample_params = prior_fn(key, 1, 10, None)
+        local_sample_obs = simulator_fn(
+            key, local_sample_params, 1, None
+        )
+        local_tokens = Tokens.from_pytree(
+            {**local_sample_params, **local_sample_obs},
+            condition=list(local_sample_params.keys()),
+            sample_ndims=1,
+            labeller=labeller,
+            functional_inputs=None,
+        )
+        local_estimator = MLP(
+            n_ff=config.n_ff,
+            latent_dim=config.latent_dim,
+            tokens=local_tokens,
+            rngs=rngs,
+        )
+        global_estimator = MLP(
+            n_ff=config.n_ff,
+            latent_dim=config.latent_dim,
+            tokens=tokens,
+            rngs=rngs,
+        )
+    else:
+        local_estimator = Transformer(
+            config=config, tokens=tokens, rngs=rngs,
+        )
+        global_estimator = Transformer(
+            config=config, tokens=tokens, rngs=rngs,
+        )
+
+    tfmpe_local = TFMPE(
+        vf_network=local_estimator,
+        base_dist=base_dist,
+        solver=diffrax.Dopri5(),
+    )
+    tfmpe_global = TFMPE(
+        vf_network=global_estimator,
+        base_dist=base_dist,
+        solver=diffrax.Dopri5(),
+    )
+    tfmpe = [tfmpe_local, tfmpe_global]
+    local_opt = nnx.Optimizer(
+        tfmpe_local, optax.adam(learning_rate=1e-4), wrt=nnx.Param
+    )
+    global_opt = nnx.Optimizer(
+        tfmpe_global, optax.adam(learning_rate=1e-4), wrt=nnx.Param
+    )
+    opt = [local_opt, global_opt]
+    return tfmpe, opt
+
+
+def _train_model(
+    training,
+    tfmpe,
+    opt,
+    *,
+    y_obs_dict,
+    simulator_fn,
+    prior_fn,
+    local_fn,
+    global_names,
+    n_local,
+    n_rounds,
+    n_samples_per_round,
+    n_val_samples,
+    n_iter_per_round,
+    batch_size,
+    rng,
+    labeller,
+    prob_transform,
+    prior_log_prob,
+    sample_batch_size,
+):
+    """Select and run the training function based on config.
+
+    Args:
+        training: 'direct', 'pf', or 'bottom_up'
+
+    Returns:
+        For 'pf': (trained_global, trained_local, losses)
+        For others: (trained_tfmpe, losses)
+    """
+    if training == 'direct':
+        return tfmpe_fit_directly(
+            tfmpe=tfmpe,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            n_groups=n_local,
+            n_samples_per_round=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            opt=opt,
+            n_iter_per_round=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            labeller=labeller,
+            delta=1e-3,
+            patience=100,
+        )
+
+    if training == 'pf':
+        tfmpe_local, tfmpe_global = tfmpe
+        local_opt, global_opt = opt
+        trained_global, trained_local, losses = tfmpe_fit_pf(
+            tfmpe_global=tfmpe_global,
+            tfmpe_local=tfmpe_local,
+            simulator_fn=simulator_fn,
+            prior_fn=prior_fn,
+            local_fn=local_fn,
+            global_names=global_names,
+            n_groups=n_local,
+            n_samples=n_samples_per_round,
+            n_val_samples=n_val_samples,
+            opt_global=global_opt,
+            opt_local=local_opt,
+            n_iter=n_iter_per_round,
+            batch_size=batch_size,
+            rng=rng,
+            labeller=labeller,
+            delta=1e-3,
+            patience=100,
+            sample_batch_size=sample_batch_size,
+        )
+        return trained_global, trained_local, losses
+
+    # bottom_up (default)
+    return tfmpe_fit_bottom_up(
+        tfmpe=tfmpe,
+        y_obs=y_obs_dict,
+        simulator_fn=simulator_fn,
+        prior_fn=prior_fn,
+        local_fn=local_fn,
+        global_names=global_names,
+        n_groups=n_local,
+        n_rounds=n_rounds,
+        n_samples_per_round=n_samples_per_round,
+        n_val_samples=n_val_samples,
+        opt=opt,
+        n_iter_per_round=n_iter_per_round,
+        batch_size=batch_size,
+        rng=rng,
+        labeller=labeller,
+        prob_transform=prob_transform,
+        prior_log_prob=prior_log_prob,
+        sample_batch_size=sample_batch_size,
+    )
+
+
+def _build_posterior(
+    training,
+    train_result,
+    *,
+    labeller,
+    slices,
+    global_names,
+    local_names,
+    n_local,
+    transforms,
+    y_obs_dict,
+    sample_batch_size,
+):
+    """Build the posterior wrapper based on training type.
+
+    Args:
+        training: 'pf' or other (bottom_up/direct)
+        train_result: Output from _train_model
+
+    Returns:
+        TFMPEPosterior or TFMPEPosteriorPF
+    """
+    if training == 'pf':
+        trained_global, trained_local, _ = train_result
+        return TFMPEPosteriorPF(
+            tfmpe_global=trained_global,
+            tfmpe_local=trained_local,
+            labeller=labeller,
+            slices=slices,
+            global_names=global_names,
+            local_names=local_names,
+            n_local=n_local,
+            transforms=transforms,
+            context=y_obs_dict,
+            sample_batch_size=sample_batch_size,
+        )
+
+    trained_tfmpe, _ = train_result
+    return TFMPEPosterior(
+        tfmpe_model=trained_tfmpe,
+        labeller=labeller,
+        slices=slices,
+        global_names=global_names,
+        local_names=local_names,
+        n_local=n_local,
+        transforms=transforms,
+        context=y_obs_dict,
+        params_f_in=None,
+        context_f_in=None,
+        sample_batch_size=sample_batch_size,
+    )
+
+
 def run(
     task,
     num_samples: int,
@@ -596,7 +863,10 @@ def run(
         num_observation: Index of observation to use (1-10)
         automatic_transforms_enabled: Whether to enable automatic
             transforms
-        **kwargs: Additional keyword arguments
+        **kwargs: Additional keyword arguments including:
+            - device: Computation device (default 'cpu')
+            - ablation: Ablation variant name (default 'none')
+            - sample_batch_size: Batch size for sampling (default 100)
 
     Returns:
         Tuple of:
@@ -610,7 +880,20 @@ def run(
     """
     device = kwargs.get('device', 'cpu')
     ablation = kwargs.get('ablation', 'none')
-    sample_batch_size = kwargs.get('sample_batch_size', 100) 
+    sample_batch_size = kwargs.get('sample_batch_size', 100)
+
+    # Map ablation variant to structured config fields
+    ABLATION_CONFIGS = {
+        'none':       dict(architecture='two_stage', training='bottom_up', attention='default', group_dim=8, n_rounds=1),
+        'linear':     dict(architecture='two_stage', training='bottom_up', attention='linear',  group_dim=8, n_rounds=1),
+        'no_grouping':dict(architecture='two_stage', training='bottom_up', attention='default', group_dim=0, n_rounds=1),
+        'mlp':        dict(architecture='mlp',       training='bottom_up', attention='default', group_dim=8, n_rounds=1),
+        'joint':      dict(architecture='single',    training='bottom_up', attention='default', group_dim=8, n_rounds=1),
+        'direct':     dict(architecture='single',    training='direct',    attention='default', group_dim=8, n_rounds=1),
+        'sequential': dict(architecture='two_stage', training='bottom_up', attention='default', group_dim=8, n_rounds=5),
+        'pf':         dict(architecture='two_stage', training='pf',        attention='default', group_dim=8, n_rounds=1),
+    }
+    abl = ABLATION_CONFIGS[ablation]
 
     # Load observation
     y_obs_torch = task.get_observation(num_observation=num_observation)
@@ -619,7 +902,6 @@ def run(
     n_local = task.n_l
 
     # Reshape observation to structured format
-    # (n_local, dims_per_group, 1)
     y_obs_dict = {
         "y": y_obs_torch.reshape(1, n_local, -1, 1).numpy(),
     }
@@ -629,148 +911,45 @@ def run(
     all_param_names = [name for name, _ in slices]
     all_param_names.append("y")
 
-    # Create callback functions for TFMPE using helpers
+    # Create callback functions for TFMPE
     prior_fn = make_prior_fn(task, automatic_transforms_enabled)
     simulator_fn = make_simulator_fn(task, automatic_transforms_enabled, device=device)
     local_fn = make_local_fn(task, automatic_transforms_enabled, device=device)
 
-    # Define which parameters are global
-    global_names = [
-        name for name in all_param_names
-        if str.startswith(name, "p_g_")
-    ]
-    local_names = [
-        name for name in all_param_names
-        if str.startswith(name, "p_l_")
-    ]
+    global_names = [n for n in all_param_names if n.startswith("p_g_")]
+    local_names = [n for n in all_param_names if n.startswith("p_l_")]
 
     # Generate sample data for token creation
     rng = jax.random.PRNGKey(42)
     rng, key = jax.random.split(rng)
-    sample_params = prior_fn(
-        key, n_local, 10, None
-    )
-    sample_obs = simulator_fn(
-        key, sample_params, n_local, None
-    )
+    sample_params = prior_fn(key, n_local, 10, None)
+    sample_obs = simulator_fn(key, sample_params, n_local, None)
 
-    # Create labeller
     labeller = Labeller.for_keys(all_param_names)
 
-    # Create tokens from sample data
-    f_in = None
     tokens = Tokens.from_pytree(
         {**sample_params, **sample_obs},
         condition=list(sample_obs.keys()),
         sample_ndims=1,
         labeller=labeller,
-        functional_inputs=f_in
+        functional_inputs=None,
     )
 
-    # Initialize TFMPE model
-    if ablation == 'linear':
-        config = TransformerConfig(
-            latent_dim=64,
-            n_encoder=2,
-            n_heads=16,
-            n_ff=2,
-            attention='linear',
-        )
-    else:
-        if ablation == 'no_grouping':
-            group_dim = 0
-        else:
-            group_dim = 8
-        config = TransformerConfig(
-            latent_dim=64,
-            n_encoder=2,
-            n_heads=16,
-            n_ff=2,
-            group_dim=group_dim
-        )
-
-    rngs = nnx.Rngs(
-        params=jax.random.PRNGKey(0),
-        dropout=jax.random.PRNGKey(1),
+    # Build model
+    tfmpe, opt = _build_model(
+        architecture=abl['architecture'],
+        attention=abl['attention'],
+        group_dim=abl['group_dim'],
+        tokens=tokens,
+        labeller=labeller,
+        prior_fn=prior_fn,
+        simulator_fn=simulator_fn,
+        key=key,
+        n_local=n_local,
     )
-    base_dist = NormalDistribution(rngs=rngs)
-
-    if ablation == 'joint' or ablation == 'direct':
-        estimator = Transformer(
-            config=config,
-            tokens=tokens,
-            rngs=rngs,
-        )
-        tfmpe = TFMPE(
-            vf_network=estimator,
-            base_dist=base_dist,
-            solver=diffrax.Dopri5(),
-        )
-        optimizer = optax.adam(learning_rate=1e-4)
-        opt = nnx.Optimizer(tfmpe, optimizer, wrt=nnx.Param)
-    else:
-        if ablation != 'mlp':
-            local_estimator = Transformer(
-                config=config,
-                tokens=tokens,
-                rngs=rngs,
-            )
-            global_estimator = Transformer(
-                config=config,
-                tokens=tokens,
-                rngs=rngs,
-            )
-            estimator = [local_estimator, global_estimator]
-        else:
-            local_sample_params = prior_fn(
-                key, 1, 10, None
-            )
-            local_sample_obs = simulator_fn(
-                key, local_sample_params, 1, None
-            )
-            local_tokens = Tokens.from_pytree(
-                {**local_sample_params, **local_sample_obs},
-                condition=list(local_sample_params.keys()),
-                sample_ndims=1,
-                labeller=labeller,
-                functional_inputs=f_in
-            )
-            local_estimator = MLP(
-                n_ff=config.n_ff,
-                latent_dim=config.latent_dim,
-                tokens=local_tokens,
-                rngs=rngs,
-            )
-            global_estimator = MLP(
-                n_ff=config.n_ff,
-                latent_dim=config.latent_dim,
-                tokens=tokens,
-                rngs=rngs,
-            )
-
-        tfmpe_local = TFMPE(
-            vf_network=local_estimator,
-            base_dist=base_dist,
-            solver=diffrax.Dopri5(),
-        )
-        tfmpe_global = TFMPE(
-            vf_network=global_estimator,
-            base_dist=base_dist,
-            solver=diffrax.Dopri5(),
-        )
-        tfmpe = [tfmpe_local, tfmpe_global]
-        local_optimizer = optax.adam(learning_rate=1e-4)
-        local_opt = nnx.Optimizer(tfmpe_local, local_optimizer, wrt=nnx.Param)
-        global_optimizer = optax.adam(learning_rate=1e-4)
-        global_opt = nnx.Optimizer(tfmpe_global, global_optimizer, wrt=nnx.Param)
-        opt = [local_opt, global_opt]
 
     # Training parameters
-    if ablation == 'sequential':
-        n_rounds = 5
-    else:
-        n_rounds = 1
-
+    n_rounds = abl['n_rounds']
     batch_size = 100
     n_val_samples = min(num_simulations // 10, batch_size)
     n_samples_per_round = num_simulations // n_rounds - n_val_samples
@@ -779,17 +958,12 @@ def run(
     # Get transforms
     transforms = task._get_transforms(n_l=n_local)["parameters"]
 
-    # probability transformation for truncated proposals
+    # Probability transformation for truncated proposals
     if automatic_transforms_enabled:
         def prob_transform(params_dict: dict, log_prob: float) -> jnp.ndarray:
             params_list = []
             for name, (start, end) in slices:
-                # Extract component from dict and reshape correctly
-                # The slice (start, end) tells us how many dimensions this
-                # component should have in the flat representation
                 component = params_dict[name]
-                # Reshape to (num_samples, -1) to flatten all dimensions
-                # except the first (sample) dimension
                 component_flat = component.reshape(component.shape[0], -1)
                 params_list.append(component_flat)
 
@@ -807,12 +981,7 @@ def run(
     def prior_log_prob(params_dict: dict) -> jnp.ndarray:
         params_list = []
         for name, (start, end) in slices:
-            # Extract component from dict and reshape correctly
-            # The slice (start, end) tells us how many dimensions this
-            # component should have in the flat representation
             component = params_dict[name]
-            # Reshape to (num_samples, -1) to flatten all dimensions
-            # except the first (sample) dimension
             component_flat = component.reshape(component.shape[0], -1)
             params_list.append(component_flat)
 
@@ -828,97 +997,43 @@ def run(
 
         return jnp.asarray(log_prob)
 
-    # Train TFMPE
+    # Train
     rng = jax.random.PRNGKey(42)
-    if ablation == 'direct':
-        trained_tfmpe, all_losses = tfmpe_fit_directly(
-            tfmpe=tfmpe,
-            simulator_fn=simulator_fn,
-            prior_fn=prior_fn,
-            n_groups=n_local,
-            n_samples_per_round=n_samples_per_round,
-            n_val_samples=n_val_samples,
-            opt=opt,
-            n_iter_per_round=n_iter_per_round,
-            batch_size=batch_size,
-            rng=rng,
-            labeller=labeller,
-            delta=1e-3,
-            patience=100
-        )
+    train_result = _train_model(
+        training=abl['training'],
+        tfmpe=tfmpe,
+        opt=opt,
+        y_obs_dict=y_obs_dict,
+        simulator_fn=simulator_fn,
+        prior_fn=prior_fn,
+        local_fn=local_fn,
+        global_names=global_names,
+        n_local=n_local,
+        n_rounds=n_rounds,
+        n_samples_per_round=n_samples_per_round,
+        n_val_samples=n_val_samples,
+        n_iter_per_round=n_iter_per_round,
+        batch_size=batch_size,
+        rng=rng,
+        labeller=labeller,
+        prob_transform=prob_transform,
+        prior_log_prob=prior_log_prob,
+        sample_batch_size=sample_batch_size,
+    )
 
-    elif ablation == 'pf':
-        trained_global, trained_local, all_losses = tfmpe_fit_pf(
-            tfmpe_global=tfmpe_global,
-            tfmpe_local=tfmpe_local,
-            simulator_fn=simulator_fn,
-            prior_fn=prior_fn,
-            local_fn=local_fn,
-            global_names=global_names,
-            n_groups=n_local,
-            n_samples=n_samples_per_round,
-            n_val_samples=n_val_samples,
-            opt_global=global_opt,
-            opt_local=local_opt,
-            n_iter=n_iter_per_round,
-            batch_size=batch_size,
-            rng=rng,
-            labeller=labeller,
-            delta=1e-3,
-            patience=100,
-            sample_batch_size=sample_batch_size
-        )
-    else:
-        trained_tfmpe, all_losses = tfmpe_fit_bottom_up(
-            tfmpe=tfmpe,
-            y_obs=y_obs_dict,
-            simulator_fn=simulator_fn,
-            prior_fn=prior_fn,
-            local_fn=local_fn,
-            global_names=global_names,
-            n_groups=n_local,
-            n_rounds=n_rounds,
-            n_samples_per_round=n_samples_per_round,
-            n_val_samples=n_val_samples,
-            opt=opt,
-            n_iter_per_round=n_iter_per_round,
-            batch_size=batch_size,
-            rng=rng,
-            labeller=labeller,
-            prob_transform=prob_transform,
-            prior_log_prob=prior_log_prob,
-            sample_batch_size=sample_batch_size
-        )
-        
-
-    # Create posterior wrapper and sample
-    if ablation == 'pf':
-        posterior_wrapped = TFMPEPosteriorPF(
-            tfmpe_global=trained_global,
-            tfmpe_local=trained_local,
-            labeller=labeller,
-            slices=slices,
-            global_names=global_names,
-            local_names=local_names,
-            n_local=n_local,
-            transforms=transforms if automatic_transforms_enabled else None,
-            context=y_obs_dict,
-            sample_batch_size=sample_batch_size
-        )
-    else:
-        posterior_wrapped = TFMPEPosterior(
-            tfmpe_model=trained_tfmpe,
-            labeller=labeller,
-            slices=slices,
-            global_names=global_names,
-            local_names=local_names,
-            n_local=n_local,
-            transforms=transforms if automatic_transforms_enabled else None,
-            context=y_obs_dict,
-            params_f_in=None,
-            context_f_in=None,
-            sample_batch_size=sample_batch_size
-        )
+    # Build posterior
+    posterior_wrapped = _build_posterior(
+        training=abl['training'],
+        train_result=train_result,
+        labeller=labeller,
+        slices=slices,
+        global_names=global_names,
+        local_names=local_names,
+        n_local=n_local,
+        transforms=transforms if automatic_transforms_enabled else None,
+        y_obs_dict=y_obs_dict,
+        sample_batch_size=sample_batch_size,
+    )
 
     posterior_samples = posterior_wrapped.sample((num_samples,))
 

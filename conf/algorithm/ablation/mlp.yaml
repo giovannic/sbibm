@@ -1,0 +1,7 @@
+
+variant: mlp
+attention: default
+group_dim: 8
+architecture: mlp
+training: bottom_up
+n_rounds: 1

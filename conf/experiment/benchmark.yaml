@@ -1,0 +1,20 @@
+# @package _global_
+#
+# Full hierarchical benchmark sweep.
+# Usage: python scripts/run_benchmark.py +experiment=benchmark -m
+
+defaults:
+  - override /algorithm: snpe
+  - override /task: hierarchical_two_moons
+
+n_l: 5
+seed: 42
+num_samples: 1000
+
+hydra:
+  sweeper:
+    params:
+      task: hierarchical_gaussian_linear,hierarchical_gaussian_linear_uniform,hierarchical_gaussian_mixture,hierarchical_sir,hierarchical_slcp,hierarchical_two_moons
+      algorithm: bottom_up,snpe,snpe_5r,deepset,fmpe,fmpe_transformer,simformer
+      num_simulations: 1000,5000,10000
+      num_observation: range(1,11)

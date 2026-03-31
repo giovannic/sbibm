@@ -1,0 +1,7 @@
+
+variant: pf
+attention: default
+group_dim: 8
+architecture: two_stage
+training: pf
+n_rounds: 1

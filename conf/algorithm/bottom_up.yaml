@@ -1,0 +1,8 @@
+
+defaults:
+  - ablation: none
+
+name: bottom_up
+_target_: sbibm.algorithms.tfmpe.bottom_up.run
+npe_scaled: false
+deepset_scaled: false

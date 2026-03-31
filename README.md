@@ -145,6 +145,78 @@ lc2st_result = lc2st(posterior, task, num_observation=1)
 ```
 
 
+## Running Benchmarks
+
+Hierarchical benchmark experiments are configured with [Hydra](https://hydra.cc/). The single entry point is `scripts/run_benchmark.py`, which replaces the previous shell scripts and argparse-based runner.
+
+### Single run
+
+```bash
+python scripts/run_benchmark.py algorithm=snpe task=hierarchical_two_moons \
+    num_simulations=1000 num_observation=1 device=cuda
+```
+
+### Experiment sweeps
+
+Three pre-defined experiment configs run full sweeps using Hydra multirun (`-m`):
+
+```bash
+# Full benchmark: 6 tasks x 7 algorithms x 3 budgets x 10 observations
+python scripts/run_benchmark.py +experiment=benchmark -m
+
+# Ablation study: 6 tasks x 8 ablation variants x 3 budgets x 10 observations
+python scripts/run_benchmark.py +experiment=ablation -m
+
+# n_l scaling: 6 tasks x 3 algorithms x 5 n_l values x 10 observations
+python scripts/run_benchmark.py +experiment=n_l_scaling -m
+```
+
+### HPC with SLURM
+
+Each multirun job can be dispatched to SLURM via the [submitit launcher](https://hydra.cc/docs/plugins/submitit_launcher/):
+
+```bash
+python scripts/run_benchmark.py +experiment=benchmark hydra/launcher=submitit_slurm -m
+```
+
+### Configuration
+
+Configs live under `conf/` with the following structure:
+
+```
+conf/
+  config.yaml                  # top-level defaults
+  algorithm/                   # one file per algorithm (snpe, fmpe, bottom_up, ...)
+    ablation/                  # ablation variants (only used by bottom_up)
+  task/                        # one file per hierarchical task
+  experiment/                  # sweep definitions (benchmark, ablation, n_l_scaling)
+```
+
+Override any parameter from the CLI:
+
+```bash
+python scripts/run_benchmark.py algorithm=bottom_up algorithm/ablation=mlp \
+    task=hierarchical_sir num_simulations=5000 seed=123
+```
+
+### Outputs
+
+Results are saved in two locations:
+- **Hydra output directory** (`outputs/<date>/<time>/`) — includes the full resolved config, logs, and CSV results
+- **Aggregate directory** (`results_aggregated/`) — flat CSV collection compatible with the analysis scripts (`scripts/generate_ablation_table.py`, `scripts/plot_ablation.py`, etc.)
+
+### Observation regeneration
+
+If using `n_l` values other than the default (5), regenerate observations before running:
+
+```bash
+for task in hierarchical_gaussian_linear hierarchical_gaussian_linear_uniform \
+    hierarchical_gaussian_mixture hierarchical_sir hierarchical_slcp hierarchical_two_moons; do
+    python sbibm/tasks/$task/task.py --n_l 50
+done
+```
+
+
 ## Algorithms
 
 As mentioned in the intro, `sbibm` wraps a number of third-party packages to run various algorithms. We found it easiest to give each algorithm the same interface: In general, each algorithm specifies a `run` function that gets `task` and hyperparameters as arguments, and eventually returns the required `num_posterior_samples`. That way, one can simply import the run function of an algorithm, tune it on any given task, and return metrics on the returned samples. Wrappers for external toolboxes implementing algorithms are in the subfolder `sbibm/algorithms`. Currently, integrations with [`sbi`](https://www.mackelab.org/sbi/), [`pyabc`](https://pyabc.readthedocs.io), [`pyabcranger`](https://github.com/diyabc/abcranger), as well as an experimental integration with [`elfi`](https://github.com/elfi-dev/elfi) are provided.
