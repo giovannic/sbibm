@@ -1,23 +1,16 @@
-# @package _global_
+# @package hydra.launcher
 #
 # SLURM launcher: 1 job per GPU, specify node via command line.
 #
 # Usage:
 #   python scripts/run_benchmark.py +experiment=benchmark \
 #     hydra/launcher=slurm_gpu \
-#     hydra.launcher.slurm_nodelist=<nodename> \
+#     +hydra.launcher.additional_parameters.nodelist=<nodename> \
 #     -m
 
-hydra:
-  launcher:
-    _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
-    submitit_folder: ${hydra.sweep.dir}/.submitit/%j
-    timeout_min: 120
-    gpus_per_node: 1
-    tasks_per_node: 1
-    cpus_per_task: 4
-    mem_gb: 32
-    slurm_nodelist: null  # override via CLI: hydra.launcher.slurm_nodelist=<node>
-    slurm_additional_parameters:
-      gres: gpu:1
-    array_parallelism: 8  # max concurrent jobs (= number of GPUs on the node)
+_target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+gpus_per_node: 1
+tasks_per_node: 1
+nodelist: null
+array_parallelism: 4  # max concurrent jobs (= number of GPUs on the node)

@@ -30,12 +30,7 @@ from pathlib import Path
 
 import hydra
 import pandas as pd
-import torch
 from omegaconf import DictConfig, OmegaConf
-
-import sbibm
-from sbibm.metrics.lc2st import lc2st
-from sbibm.metrics.reverse_kl import reverse_kl
 
 log = logging.getLogger(__name__)
 
@@ -70,10 +65,11 @@ def compute_adjusted_simulations(cfg: DictConfig, n_l: int) -> int:
 
 @hydra.main(version_base="1.3", config_path="../conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    import sys, os
-    log.info(f"Python: {sys.executable}")
-    log.info(f"LD_LIBRARY_PATH: {os.environ.get('LD_LIBRARY_PATH', 'NOT SET')}")
-    log.info(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'NOT SET')}")
+    import torch
+    import sbibm
+    from sbibm.metrics.lc2st import lc2st
+    from sbibm.metrics.reverse_kl import reverse_kl
+
     log.info(f"Config:\n{OmegaConf.to_yaml(cfg)}")
 
     # Set random seed
