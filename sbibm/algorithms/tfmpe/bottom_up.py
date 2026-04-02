@@ -23,6 +23,27 @@ from sbibm.tasks import Task
 from sbibm.tasks.distributions import BlockwiseDistribution, SummedStackTransform
 
 
+def _reshape_obs(obs, n_local, tokenisation):
+    """Reshape flat observations to token-compatible shape.
+
+    Args:
+        obs: Array of shape (..., n_local * obs_per_group)
+        n_local: Number of local groups
+        tokenisation: "scalar" or "grouped"
+
+    Returns:
+        Array with trailing (event, batch) dims arranged per strategy:
+        - "scalar": (..., n_local, obs_per_group, 1) — one token per value
+        - "grouped": (..., n_local, 1, obs_per_group) — one token per group
+    """
+    leading = obs.shape[:-1]
+    flat_dim = obs.shape[-1]
+    obs_per_group = flat_dim // n_local
+    if tokenisation == "grouped":
+        return obs.reshape(*leading, n_local, 1, obs_per_group)
+    return obs.reshape(*leading, n_local, obs_per_group, 1)
+
+
 class TFMPEPosterior:
     """Wrapper for TFMPE model to provide posterior interface.
 
@@ -43,7 +64,8 @@ class TFMPEPosterior:
         context_f_in,
         transforms=None,
         context=None,
-        sample_batch_size=100
+        sample_batch_size=100,
+        tokenisation='scalar',
     ):
         """Initialize TFMPE posterior wrapper.
 
@@ -59,6 +81,7 @@ class TFMPEPosterior:
                 parameters
             context: Dict dictionary of (observations) for
                 computing log prob
+            tokenisation: "scalar" or "grouped"
         """
         self.tfmpe_model = tfmpe_model
         self.labeller = labeller
@@ -71,6 +94,7 @@ class TFMPEPosterior:
         self.params_f_in = params_f_in
         self.context_f_in = context_f_in
         self.sample_batch_size = sample_batch_size
+        self.tokenisation = tokenisation
 
     def sample(self, shape, x=None):
         """Sample from posterior.
@@ -108,8 +132,11 @@ class TFMPEPosterior:
         # Sample from posterior
         # TODO: Handle RNG seeding properly
         if x is not None:
-            torch_context = x.reshape(x.shape[0], self.n_local, -1, 1)
-            context = { "y":  jnp.asarray(torch_context) }
+            context = {
+                "y": _reshape_obs(
+                    jnp.asarray(x), self.n_local, self.tokenisation
+                ),
+            }
         else:
             context = self.context
             context = tree.map(
@@ -204,7 +231,8 @@ class TFMPEPosteriorPF:
         n_local,
         transforms=None,
         context=None,
-        sample_batch_size=100
+        sample_batch_size=100,
+        tokenisation='scalar',
     ):
         self.tfmpe_global = tfmpe_global
         self.tfmpe_local = tfmpe_local
@@ -216,6 +244,7 @@ class TFMPEPosteriorPF:
         self.transforms = transforms
         self.context = context
         self.sample_batch_size = sample_batch_size
+        self.tokenisation = tokenisation
 
     def sample(self, shape, x=None):
         num_samples = shape[0]
@@ -235,8 +264,11 @@ class TFMPEPosteriorPF:
 
         # Get observation context
         if x is not None:
-            torch_context = x.reshape(x.shape[0], self.n_local, -1, 1)
-            y_obs = {"y": jnp.asarray(torch_context)}
+            y_obs = {
+                "y": _reshape_obs(
+                    jnp.asarray(x), self.n_local, self.tokenisation
+                ),
+            }
         else:
             y_obs = self.context
             y_obs = tree.map(
@@ -437,12 +469,14 @@ def make_prior_fn(task, automatic_transforms_enabled: bool = False):
 def make_simulator_fn(
     task,
     automatic_transforms_enabled: bool = False,
-    device: str = 'cpu'
+    device: str = 'cpu',
+    tokenisation: str = 'scalar',
     ):
     """Create simulator function for TFMPE.
 
     Args:
         task: SBIBM task instance
+        tokenisation: "scalar" or "grouped"
 
     Returns:
         simulator_fn(rng, params_dict, n) -> dict with 'y' key
@@ -459,7 +493,6 @@ def make_simulator_fn(
 
         Returns:
             Dictionary with 'y' key containing observations
-            shaped (n_samples, n, n_events, 1)
         """
         slices = _get_slices(task, n)
         params_list = [
@@ -478,8 +511,8 @@ def make_simulator_fn(
         obs_torch = task.get_simulator()(params_torch)
 
         # Convert back to JAX and reshape to n groups
-        obs_jax = jnp.asarray(obs_torch.cpu().numpy()).reshape(
-            obs_torch.shape[0], n, -1, 1
+        obs_jax = _reshape_obs(
+            jnp.asarray(obs_torch.cpu().numpy()), n, tokenisation
         )
         obs_dict = {"y": obs_jax}
 
@@ -812,12 +845,14 @@ def _build_posterior(
     transforms,
     y_obs_dict,
     sample_batch_size,
+    tokenisation='scalar',
 ):
     """Build the posterior wrapper based on training type.
 
     Args:
         training: 'pf' or other (bottom_up/direct)
         train_result: Output from _train_model
+        tokenisation: "scalar" or "grouped"
 
     Returns:
         TFMPEPosterior or TFMPEPosteriorPF
@@ -835,6 +870,7 @@ def _build_posterior(
             transforms=transforms,
             context=y_obs_dict,
             sample_batch_size=sample_batch_size,
+            tokenisation=tokenisation,
         )
 
     trained_tfmpe, _ = train_result
@@ -850,6 +886,7 @@ def _build_posterior(
         params_f_in=None,
         context_f_in=None,
         sample_batch_size=sample_batch_size,
+        tokenisation=tokenisation,
     )
 
 
@@ -893,6 +930,9 @@ def run(
     n_encoder = kwargs.get('n_encoder', 2)
     n_heads = kwargs.get('n_heads', 4)
     n_ff = kwargs.get('n_ff', 2)
+    tokenisation = kwargs.get('tokenisation', 'scalar')
+    if tokenisation == 'grouped':
+        sample_batch_size = kwargs.get('grouped_sample_batch_size', 1000)
 
     # Map ablation variant to structured config fields
     ABLATION_CONFIGS = {
@@ -915,7 +955,9 @@ def run(
 
     # Reshape observation to structured format
     y_obs_dict = {
-        "y": y_obs_torch.reshape(1, n_local, -1, 1).numpy(),
+        "y": _reshape_obs(
+            y_obs_torch.numpy().reshape(1, -1), n_local, tokenisation
+        ),
     }
 
     slices = _get_slices(task, n_local)
@@ -925,7 +967,10 @@ def run(
 
     # Create callback functions for TFMPE
     prior_fn = make_prior_fn(task, automatic_transforms_enabled)
-    simulator_fn = make_simulator_fn(task, automatic_transforms_enabled, device=device)
+    simulator_fn = make_simulator_fn(
+        task, automatic_transforms_enabled, device=device,
+        tokenisation=tokenisation,
+    )
     local_fn = make_local_fn(task, automatic_transforms_enabled, device=device)
 
     global_names = [n for n in all_param_names if n.startswith("p_g_")]
@@ -1049,6 +1094,7 @@ def run(
         transforms=transforms if automatic_transforms_enabled else None,
         y_obs_dict=y_obs_dict,
         sample_batch_size=sample_batch_size,
+        tokenisation=tokenisation,
     )
 
     posterior_samples = posterior_wrapped.sample((num_samples,))
