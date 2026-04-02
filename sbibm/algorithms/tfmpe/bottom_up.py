@@ -582,6 +582,10 @@ def _build_model(
     architecture,
     attention,
     group_dim,
+    latent_dim,
+    n_encoder,
+    n_heads,
+    n_ff,
     tokens,
     labeller,
     prior_fn,
@@ -595,6 +599,10 @@ def _build_model(
         architecture: 'single', 'two_stage', or 'mlp'
         attention: 'linear' or 'default'
         group_dim: Group dimension for transformer (0 disables grouping)
+        latent_dim: Hidden dimension for transformer layers
+        n_encoder: Number of encoder blocks
+        n_heads: Number of attention heads
+        n_ff: Number of feedforward layers per block
         tokens: Sample tokens for model initialization
         labeller: Token labeller
         prior_fn: Prior sampling function
@@ -607,18 +615,18 @@ def _build_model(
     """
     if attention == 'linear':
         config = TransformerConfig(
-            latent_dim=64,
-            n_encoder=2,
-            n_heads=16,
-            n_ff=2,
+            latent_dim=latent_dim,
+            n_encoder=n_encoder,
+            n_heads=n_heads,
+            n_ff=n_ff,
             attention='linear',
         )
     else:
         config = TransformerConfig(
-            latent_dim=64,
-            n_encoder=2,
-            n_heads=16,
-            n_ff=2,
+            latent_dim=latent_dim,
+            n_encoder=n_encoder,
+            n_heads=n_heads,
+            n_ff=n_ff,
             group_dim=group_dim,
         )
 
@@ -881,6 +889,10 @@ def run(
     device = kwargs.get('device', 'cpu')
     ablation = kwargs.get('ablation', 'none')
     sample_batch_size = kwargs.get('sample_batch_size', 100)
+    latent_dim = kwargs.get('latent_dim', 256)
+    n_encoder = kwargs.get('n_encoder', 2)
+    n_heads = kwargs.get('n_heads', 4)
+    n_ff = kwargs.get('n_ff', 2)
 
     # Map ablation variant to structured config fields
     ABLATION_CONFIGS = {
@@ -940,6 +952,10 @@ def run(
         architecture=abl['architecture'],
         attention=abl['attention'],
         group_dim=abl['group_dim'],
+        latent_dim=latent_dim,
+        n_encoder=n_encoder,
+        n_heads=n_heads,
+        n_ff=n_ff,
         tokens=tokens,
         labeller=labeller,
         prior_fn=prior_fn,

@@ -6,3 +6,9 @@ name: bottom_up
 _target_: sbibm.algorithms.tfmpe.bottom_up.run
 npe_scaled: false
 deepset_scaled: false
+
+# Transformer architecture
+latent_dim: 256
+n_encoder: 2
+n_heads: 4
+n_ff: 2
