@@ -15,6 +15,6 @@ hydra:
   sweeper:
     params:
       task: hierarchical_gaussian_linear,hierarchical_gaussian_linear_uniform,hierarchical_gaussian_mixture,hierarchical_sir,hierarchical_slcp,hierarchical_two_moons
+      num_observation: range(1,11)
       algorithm: bottom_up,snpe,snpe_5r,deepset,fmpe,fmpe_transformer,simformer
       n_l: 1,10,20,50,100
-      num_observation: range(1,11)
