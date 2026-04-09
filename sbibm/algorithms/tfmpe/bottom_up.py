@@ -911,7 +911,10 @@ def run(
         **kwargs: Additional keyword arguments including:
             - device: Computation device (default 'cpu')
             - ablation: Ablation variant name (default 'none')
-            - sample_batch_size: Batch size for sampling (default 100)
+            - sample_batch_size: Batch size for sampling during
+                training (default 100)
+            - posterior_sample_batch_size: Batch size for posterior
+                sampling (default: sample_batch_size)
 
     Returns:
         Tuple of:
@@ -926,6 +929,9 @@ def run(
     device = kwargs.get('device', 'cpu')
     ablation = kwargs.get('ablation', 'none')
     sample_batch_size = kwargs.get('sample_batch_size', 100)
+    posterior_sample_batch_size = kwargs.get(
+        'posterior_sample_batch_size', sample_batch_size
+    )
     latent_dim = kwargs.get('latent_dim', 256)
     n_encoder = kwargs.get('n_encoder', 2)
     n_heads = kwargs.get('n_heads', 4)
@@ -1093,7 +1099,7 @@ def run(
         n_local=n_local,
         transforms=transforms if automatic_transforms_enabled else None,
         y_obs_dict=y_obs_dict,
-        sample_batch_size=sample_batch_size,
+        sample_batch_size=posterior_sample_batch_size,
         tokenisation=tokenisation,
     )
 

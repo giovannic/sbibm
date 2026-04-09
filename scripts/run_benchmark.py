@@ -105,6 +105,10 @@ def main(cfg: DictConfig) -> None:
     # Handle bottom_up specifics
     if cfg.algorithm.name == "bottom_up":
         algo_kwargs["sample_batch_size"] = cfg.task.bottom_up_sample_batch_size
+        if "bottom_up_posterior_sample_batch_size" in cfg.task:
+            algo_kwargs["posterior_sample_batch_size"] = (
+                cfg.task.bottom_up_posterior_sample_batch_size
+            )
         algo_kwargs["ablation"] = cfg.algorithm.ablation.variant
 
     # Run algorithm
