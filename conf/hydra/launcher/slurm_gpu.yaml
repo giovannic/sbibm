@@ -13,4 +13,5 @@ submitit_folder: ${hydra.sweep.dir}/.submitit/%j
 gpus_per_node: 1
 tasks_per_node: 1
 nodelist: null
+timeout_min: null
 array_parallelism: 4  # max concurrent jobs (= number of GPUs on the node)
