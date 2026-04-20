@@ -13,6 +13,9 @@ n_encoder: 2
 n_heads: 4
 n_ff: 2
 
+# Training batch size
+batch_size: 100
+
 # Tokenisation strategy: "scalar" (one token per value) or
 # "grouped" (pack all observations per local group into one token)
 tokenisation: scalar

@@ -937,6 +937,7 @@ def run(
     n_heads = kwargs.get('n_heads', 4)
     n_ff = kwargs.get('n_ff', 2)
     tokenisation = kwargs.get('tokenisation', 'scalar')
+    batch_size = kwargs.get('batch_size', 100)
     if tokenisation == 'grouped':
         sample_batch_size = kwargs.get('grouped_sample_batch_size', 1000)
 
@@ -1017,7 +1018,6 @@ def run(
 
     # Training parameters
     n_rounds = abl['n_rounds']
-    batch_size = 100
     n_val_samples = min(num_simulations // 10, batch_size)
     n_samples_per_round = num_simulations // n_rounds - n_val_samples
     n_iter_per_round = 1000
