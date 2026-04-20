@@ -39,10 +39,11 @@ ABLATION_TOKENS = {
     "_mlp_": "MLP",
     "_linear_": "Linear",
     "_no_grouping_": "No Grouping",
+    "_pf_": "Posterior Factorisation",
 }
 
 # Fixed method order and label map
-METHODS = ["TFMPE", "Direct", "Joint", "MLP", "Linear", "No Grouping"]
+METHODS = ["TFMPE", "Direct", "Joint", "MLP", "Posterior Factorisation", "No Grouping"]
 METHOD_LABEL_MAP = {m: m for m in METHODS}
 
 

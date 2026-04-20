@@ -14,7 +14,7 @@ num_samples: 1000
 hydra:
   sweeper:
     params:
+      num_observation: range(1,11)
       task: hierarchical_gaussian_linear,hierarchical_gaussian_linear_uniform,hierarchical_gaussian_mixture,hierarchical_sir,hierarchical_slcp,hierarchical_two_moons
       algorithm/ablation: none,mlp,joint,direct,linear,sequential,pf,no_grouping
       num_simulations: 1000,5000,10000
-      num_observation: range(1,11)
