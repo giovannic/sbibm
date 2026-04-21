@@ -294,26 +294,14 @@ def generate_latex_table(
     tasks: Optional[list[str]] = None,
     algorithms: Optional[list[str]] = None,
     budgets: Optional[list[int]] = None,
-    caption: Optional[str] = None,
-    label: Optional[str] = None,
     x_column: str = "num_simulations",
     x_label: Optional[str] = None,
 ) -> str:
-    """Generate LaTeX table from benchmark results.
+    """Generate a LaTeX tabular block from benchmark results.
 
-    Args:
-        results: Dict mapping task_name -> DataFrame with results
-        metric: Name of metric column to display
-        tasks: List of tasks to include (None = all)
-        algorithms: List of algorithms to include (None = all)
-        budgets: List of simulation budgets to include (None = all)
-        caption: Custom caption (None = auto-generate)
-        label: Custom LaTeX label (None = auto-generate)
-        x_column: Column to use for row indexing (default: "num_simulations")
-        x_label: Custom label for first column header (None = auto-generate from x_column)
-
-    Returns:
-        Complete LaTeX table as string
+    Emits only the ``tabular`` environment (plus a header comment). The
+    surrounding ``table`` environment, caption, and label are owned by the
+    consuming LaTeX document.
     """
     log = logging.getLogger(__name__)
 
@@ -357,33 +345,23 @@ def generate_latex_table(
     lines.append(f"% Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
-    # Table environment
-    lines.append("\\begin{table}[htbp]")
-    lines.append("\\centering")
-    lines.append("\\small")
+    # Format x_value for headers
+    def format_x_value(x_value):
+        if x_column == "num_simulations":
+            return format_number(int(x_value))
+        return str(int(x_value))
 
-    # Caption
-    if caption is None:
-        caption = f"Results for metric: {escape_latex(metric)}"
-    lines.append(f"\\caption{{{caption}}}")
-
-    # Label
-    if label is None:
-        label = f"table:{metric.replace('_', '_')}"
-    lines.append(f"\\label{{{label}}}")
-
-    # Column specification: first column + one per algorithm
-    n_cols = len(all_algorithms)
+    # Column specification: algorithm label column + one per x_value
+    n_cols = len(all_x_values)
     col_spec = "l|" + "c|" * (n_cols - 1) + "c"
     lines.append(f"\\begin{{tabular}}{{{col_spec}}}")
 
-    # Header row
+    # Header row: algorithm col + "<x_label> = <value>" per numeric column
     lines.append("\\toprule")
-    # Generate header label from x_column if not provided
     if x_label is None:
         x_label = escape_latex(x_column.replace("_", "\\_"))
-    header_parts = [x_label] + [
-        escape_latex(ALGO_LABEL_MAP.get(algo, algo.upper())) for algo in all_algorithms
+    header_parts = ["Method"] + [
+        f"{x_label} = {format_x_value(x)}" for x in all_x_values
     ]
     lines.append(" & ".join(header_parts) + " \\\\")
 
@@ -391,66 +369,61 @@ def generate_latex_table(
     for _, task_name in enumerate(all_tasks):
         df = results[task_name]
 
-        # Task section header
+        # Task section header (spans algorithm col + x_value cols)
         lines.append("\\midrule")
         task_display = task_name.replace("_", " ").title()
         task_display = task_display.replace("Sir", "SIR").replace("Slcp", "SLCP")
         task_display = escape_latex(task_display)
-        lines.append(f"\\multicolumn{{{n_cols + 1}}}{{l}}{{\\textbf{{{task_display}}}}} \\\\")
+        lines.append(
+            f"\\multicolumn{{{n_cols + 1}}}{{l}}{{\\textbf{{{task_display}}}}} \\\\"
+        )
         lines.append("\\midrule")
 
-        # Process each x_value (budget or n_l)
-        for x_value in all_x_values:
-            # Format row label: use comma formatting for large numbers, plain for small
-            if x_column == "num_simulations":
-                row_label = format_number(int(x_value))
-            else:
-                row_label = str(int(x_value))
-            row_parts = [row_label]
-
-            # Compute statistics for each algorithm
-            algo_stats = {}
-            for algo in all_algorithms:
-                # Filter data for this task, algorithm, and x_value
+        # Precompute stats for every (algorithm, x_value) cell so we can pick
+        # the best algorithm per column for bolding.
+        stats = {algo: {} for algo in all_algorithms}
+        for algo in all_algorithms:
+            for x_value in all_x_values:
                 mask = (
                     (df["algorithm"] == algo)
                     & (df[x_column] == x_value)
                     & (df[metric].notna())
                 )
                 values = df[mask][metric]
-
                 if len(values) > 0:
-                    mean, lower_ci, upper_ci = compute_statistics(values)
-                    algo_stats[algo] = (mean, lower_ci, upper_ci)
+                    stats[algo][x_value] = compute_statistics(values)
                 else:
-                    algo_stats[algo] = None
+                    stats[algo][x_value] = None
 
-            # Determine best algorithm for this x_value
-            valid_algos = {k: v for k, v in algo_stats.items() if v is not None}
-            if valid_algos:
-                if bold_direction == "min":
-                    best_algo = min(valid_algos.keys(), key=lambda k: valid_algos[k][0])
-                else:
-                    best_algo = max(valid_algos.keys(), key=lambda k: valid_algos[k][0])
+        # Best algorithm per x_value (column-wise bolding)
+        best_per_x = {}
+        for x_value in all_x_values:
+            valid = {a: stats[a][x_value] for a in all_algorithms if stats[a][x_value] is not None}
+            if not valid:
+                best_per_x[x_value] = None
+                continue
+            if bold_direction == "min":
+                best_per_x[x_value] = min(valid, key=lambda k: valid[k][0])
             else:
-                best_algo = None
+                best_per_x[x_value] = max(valid, key=lambda k: valid[k][0])
 
-            # Format cells for each algorithm
-            for algo in all_algorithms:
-                if algo_stats[algo] is not None:
-                    mean, lower_ci, upper_ci = algo_stats[algo]
-                    is_best = algo == best_algo
-                    cell = format_cell(mean, lower_ci, upper_ci, is_best)
-                    row_parts.append(cell)
-                else:
+        # One row per algorithm
+        for algo in all_algorithms:
+            algo_label = escape_latex(ALGO_LABEL_MAP.get(algo, algo.upper()))
+            row_parts = [algo_label]
+            for x_value in all_x_values:
+                cell_stats = stats[algo][x_value]
+                if cell_stats is None:
                     row_parts.append("--")
-
+                    continue
+                mean, lower_ci, upper_ci = cell_stats
+                is_best = algo == best_per_x[x_value]
+                row_parts.append(format_cell(mean, lower_ci, upper_ci, is_best))
             lines.append(" & ".join(row_parts) + " \\\\")
 
     # Footer
     lines.append("\\bottomrule")
     lines.append("\\end{tabular}")
-    lines.append("\\end{table}")
     lines.append("")
 
     return "\n".join(lines)
@@ -507,18 +480,6 @@ def main():
         nargs="+",
         default=None,
         help="List of simulation budgets to include (default: all)",
-    )
-    parser.add_argument(
-        "--caption",
-        type=str,
-        default=None,
-        help="Custom caption for the table",
-    )
-    parser.add_argument(
-        "--label",
-        type=str,
-        default=None,
-        help="Custom LaTeX label for the table",
     )
     parser.add_argument(
         "--verbose",
@@ -593,23 +554,12 @@ def main():
     # Generate LaTeX table
     log.info("\nGenerating LaTeX table...")
 
-    # Adjust caption and label for n_l mode
-    caption = args.caption
-    label = args.label
-    if args.n_l_mode:
-        if caption is None:
-            caption = f"n\\_l scaling results for metric: {escape_latex(args.metric)}"
-        if label is None:
-            label = f"table:n_l_scaling_{args.metric}"
-
     latex_table = generate_latex_table(
         results=results,
         metric=args.metric,
         tasks=args.tasks,
         algorithms=args.algorithms,
         budgets=args.budgets,
-        caption=caption,
-        label=label,
         x_column=x_column,
         x_label=x_label,
     )
