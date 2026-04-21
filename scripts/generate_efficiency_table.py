@@ -21,6 +21,17 @@ import pandas as pd
 
 NPE_SCALED_ALGORITHMS = {"snpe", "snpe_5r", "fmpe", "fmpe_transformer", "simformer"}
 
+# Label map for algorithm display names (mirrors plot_hierarchical_benchmark.py)
+ALGO_LABEL_MAP = {
+    "snpe": "NPE",
+    "snpe_5r": "SNPE (5 rounds)",
+    "fmpe": "FMPE",
+    "fmpe_transformer": "FMPE Transformer",
+    "simformer": "Simformer",
+    "bottom_up": "LF",
+    "deepset": "PF",
+}
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for the table generation script."""
@@ -241,8 +252,8 @@ def format_cell(
     if lower_ci == mean and upper_ci == mean:
         cell_text = f"{mean:.2e}"
     else:
-        # Format with floating point notation
-        cell_text = f"{mean:.2e} [{lower_ci:.2e}, {upper_ci:.2e}]"
+        margin = upper_ci - mean
+        cell_text = f"{mean:.2e} $\\pm$ {margin:.2e}"
 
     # Apply bold if this is the best result
     if is_best:
@@ -372,7 +383,7 @@ def generate_latex_table(
     if x_label is None:
         x_label = escape_latex(x_column.replace("_", "\\_"))
     header_parts = [x_label] + [
-        escape_latex(algo.upper()) for algo in all_algorithms
+        escape_latex(ALGO_LABEL_MAP.get(algo, algo.upper())) for algo in all_algorithms
     ]
     lines.append(" & ".join(header_parts) + " \\\\")
 
@@ -382,7 +393,9 @@ def generate_latex_table(
 
         # Task section header
         lines.append("\\midrule")
-        task_display = escape_latex(task_name.replace("_", " ").title())
+        task_display = task_name.replace("_", " ").title()
+        task_display = task_display.replace("Sir", "SIR").replace("Slcp", "SLCP")
+        task_display = escape_latex(task_display)
         lines.append(f"\\multicolumn{{{n_cols + 1}}}{{l}}{{\\textbf{{{task_display}}}}} \\\\")
         lines.append("\\midrule")
 
@@ -557,11 +570,11 @@ def main():
             n_l_values=args.n_l_values,
         )
         x_column = "n_l"
-        x_label = "$n_\\ell$"
+        x_label = "$n_s$"
     else:
         results = load_all_results(input_dir=Path(args.input_dir), n_l=args.n_l)
         x_column = "num_simulations"
-        x_label = "n\\_simulations"
+        x_label = "N"
 
     # Print summary statistics
     log.info("\nSummary Statistics:")
